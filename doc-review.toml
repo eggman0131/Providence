@@ -1,0 +1,82 @@
+# doc-review.toml — the doc↔code map for the advisory doc-drift review
+# (ADR 0013). Dev-tooling data, NOT game config: it is read only by
+# `cargo xtask doc-review`, lives at the repo root beside the other tooling
+# policies (deny.toml, rustfmt.toml, rust-toolchain.toml), and is deliberately
+# outside `config/` (which is schema-validated game config only).
+#
+# Each [[area]] says: when a changed path starts with `path`, the docs in `docs`
+# may have gone stale (I6) and become review candidates — unless they were
+# edited in the same range. Docs in this repo cite decisions and invariants, not
+# crate paths, so this map is the primary doc↔code link; the detector also flags
+# any doc that *cites an ADR whose file changed*.
+#
+# Editing this map is a tooling change, not an ADR-level change (cf. the
+# allow-lists in xtask/src/magic.rs and xtask/src/boundary.rs). Keep `path`
+# values repo-relative with forward slashes; a trailing slash scopes to a
+# directory, no slash matches a specific file (prefix match).
+
+[[area]]
+path = "crates/core"
+docs = ["docs/20-architecture.md", "docs/10-game-design.md"]
+
+[[area]]
+path = "crates/config"
+docs = ["docs/40-parameterisation.md"]
+
+[[area]]
+path = "crates/ports"
+docs = ["docs/20-architecture.md"]
+
+[[area]]
+path = "crates/app"
+docs = ["docs/20-architecture.md"]
+
+[[area]]
+path = "adapters/config-loader"
+docs = ["docs/40-parameterisation.md", "docs/20-architecture.md"]
+
+[[area]]
+# Any other adapter (persistence, clock/RNG, renderer, the LLM opponent, …).
+path = "adapters/"
+docs = ["docs/20-architecture.md"]
+
+[[area]]
+path = "config/"
+docs = ["docs/40-parameterisation.md", "docs/10-game-design.md"]
+
+[[area]]
+path = "docs/contracts/config.schema.json"
+docs = ["docs/40-parameterisation.md", "docs/contracts/README.md"]
+
+[[area]]
+# The gate and its checks — the enforcement framework the contract governs.
+path = "xtask/"
+docs = [
+    "docs/30-ai-agent-contract.md",
+    "docs/20-architecture.md",
+    "docs/60-constraints.md",
+]
+
+[[area]]
+path = ".cargo/config.toml"
+docs = ["docs/30-ai-agent-contract.md"]
+
+[[area]]
+path = ".github/workflows/"
+docs = ["docs/60-constraints.md", "docs/30-ai-agent-contract.md"]
+
+[[area]]
+path = "deny.toml"
+docs = ["docs/60-constraints.md"]
+
+[[area]]
+path = "rust-toolchain.toml"
+docs = ["docs/60-constraints.md"]
+
+[[area]]
+path = "rustfmt.toml"
+docs = ["docs/60-constraints.md"]
+
+[[area]]
+path = "Cargo.toml"
+docs = ["docs/20-architecture.md"]

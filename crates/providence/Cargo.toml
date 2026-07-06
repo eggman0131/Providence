@@ -1,0 +1,16 @@
+[package]
+name = "providence"
+description = "Composition root: wires adapters to ports and launches the game"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The composition root is the ONLY crate permitted to depend on concrete
+# adapters (docs/20-architecture.md §5 rule 2, ADR 0009).
+[dependencies]
+providence-app = { workspace = true }
+providence-config = { workspace = true }
+providence-config-loader = { workspace = true }
+
+[lints]
+workspace = true

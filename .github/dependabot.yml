@@ -1,0 +1,35 @@
+# Dependency freshness / anti-rot (I8) operationalised via ADR 0010:
+# Dependabot proposes, the gate (`cargo gate`, in CI) validates, merge only on
+# green. Security updates + alerts are enabled at the repo level and land as
+# individual, ungrouped PRs so a fix is never delayed by a routine bump.
+#
+# Grouping routine version bumps keeps the number of (expensive, macOS-arm64)
+# gate runs down; major bumps stay separate so each gets a deliberate review.
+# Labels are left to Dependabot's defaults (`dependencies`, `github_actions`).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build # conventional-commits: `build(deps): …` on squash-merge
+      include: scope
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates # security updates stay individual
+        update-types: ["minor", "patch"]
+      # Major bumps are intentionally ungrouped — one PR each, reviewed on merit.
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci # Actions live in CI: `ci(deps): …`
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"] # all Action bumps ride together — one PR, one gate run

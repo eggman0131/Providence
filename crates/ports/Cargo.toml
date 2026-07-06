@@ -1,0 +1,12 @@
+[package]
+name = "providence-ports"
+description = "Port interfaces (traits only) between the application layer and adapters"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Interfaces only — no implementations, no external libraries.
+[dependencies]
+
+[lints]
+workspace = true

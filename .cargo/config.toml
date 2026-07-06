@@ -1,0 +1,5 @@
+# `cargo gate` is THE gate (contract §9, ADR 0009): one command, single
+# definition of "green". `cargo xtask setup` is one-command provisioning (I9).
+[alias]
+xtask = "run --quiet --package xtask --"
+gate = "run --quiet --package xtask -- gate"

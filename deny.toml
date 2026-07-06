@@ -1,0 +1,33 @@
+# cargo-deny policy (I8: minimal, pinned, offline-compatible dependencies).
+# Run via `cargo gate`; advisory DB is fetched by `cargo xtask setup`
+# (dev-time network only — the gate itself then runs offline).
+
+[graph]
+targets = ["aarch64-apple-darwin"]
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+# Workspace crates are private (publish = false); the repository's own
+# licence is the director's decision, tracked separately from dep policy.
+private = { ignore = true }
+# Additions to this list are a reviewed change; prefer permissive licenses.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal path dependencies carry no version by design (private workspace).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

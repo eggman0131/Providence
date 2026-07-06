@@ -1,0 +1,57 @@
+# 0015 — A read-only debug/HUD developer overlay (egui, feature-gated)
+
+- **Status:** Accepted
+- **Date:** 2026-07-02
+- **Deciders:** Director + agent session
+- **Related:** [`../20-architecture.md`](../20-architecture.md) §4–5, [`../50-llm-opponent.md`](../50-llm-opponent.md) §6, [`../40-parameterisation.md`](../40-parameterisation.md) §2, [`../60-constraints.md`](../60-constraints.md), [`0002`](./0002-llm-as-strategic-advisor.md), [`0004`](./0004-deterministic-core-ports-and-adapters.md), [`0005`](./0005-macbook-only-offline-runtime.md), [`0007`](./0007-wgpu-rendering-framework.md), [`0008`](./0008-toml-config-format-types-first-schema.md), [`0014`](./0014-ollama-local-llm-runtime.md); resolves issue [#9](https://github.com/eggman0131/Providence/issues/9)
+
+## Context
+
+[ADR 0007](./0007-wgpu-rendering-framework.md) deliberately deferred "any separate **debug/HUD UI** layer (e.g. an immediate-mode `egui` overlay), which, if added, gets its own ADR." Issue [#9](https://github.com/eggman0131/Providence/issues/9) posed that question — a developer-facing overlay for sim state, seed/RNG, LLM advisor I/O, and timings — and flagged the three architectural sub-questions it raises: is it presentation or a privileged surface, is it read-only-through-a-port or a debug backdoor, and does it ship. The director has decided **yes, build it**. This ADR is that decision and fixes those three boundaries.
+
+Forces that bound the choice:
+
+- **Agents-only maintenance & "blind debugging" (contract §1).** [ADR 0007](./0007-wgpu-rendering-framework.md) identified that a model "cannot see a wrong frame" and gave agents the headless-PNG self-check as one answer. A live overlay that surfaces **sim state, seed/RNG stream position, the advisor's last Observation→StrategyDecision, and timings** is the complementary answer for *non-visual* state — it turns "blind debugging" into "read the panel." *How well models can author and maintain the toolkit* is a first-class criterion, exactly as in [0007](./0007-wgpu-rendering-framework.md)/[0014](./0014-ollama-local-llm-runtime.md).
+- **Determinism (I3).** A debug UI is the classic determinism hazard: a "poke the values" panel is precisely the hidden, unrecorded mutation path that would break bit-for-bit replay. This must be prevented *by construction*, not by discipline.
+- **Boundary direction (I2/I4).** A new presentation surface must stay an **adapter** with **no** privileged core access and **no** game state — it reads derived data, like the renderer reads render frames ([`20-architecture.md`](../20-architecture.md) §4).
+- **Offline & private (I7).** The overlay and every value it shows are local; no network, no telemetry.
+- **Reuse, not a new coupling.** The advisor I/O it displays is the **record–replay data already specified** ([`50-llm-opponent.md`](../50-llm-opponent.md) §6) — read from the recording, never a second path to the model.
+- **One rendering stack.** The renderer is already `wgpu`/`winit` ([ADR 0007](./0007-wgpu-rendering-framework.md)); the overlay should **compose with it**, not introduce a second GUI/render stack.
+
+## Decision
+
+We will build a **developer-facing debug/HUD overlay** as a **read-only presentation surface**, using **`egui`** (immediate-mode, pure-Rust), realised **inside the existing renderer adapter** behind a **`debug-hud` cargo feature** and drawn over the game frame via `egui-wgpu`. It is **excluded from the default release build** and has **no path into the core**.
+
+- **Read-only over a derived snapshot — no privileged core access.** The application layer assembles a **`DiagnosticsSnapshot`**: a derived, read-only value carrying the tick, the seed and RNG-stream position, a sim-state summary, the **last recorded advisor `Observation`→`StrategyDecision`-or-fallback** with its latency and model tag, and **edge-measured** timings. It is passed into the presentation path alongside the render frame, exactly as frames already flow ([`20-architecture.md`](../20-architecture.md) §4). The overlay **holds no simulation state**, imports no `core`, and cannot mutate state. Assembling the snapshot is a **pure read** — it must not perturb RNG, tick ordering, or state (no "peek" that advances a stream).
+- **Debug *actions* go through the recorded command path — never a backdoor.** Any HUD control that affects the simulation (pause, single-step, spawn, set-resource, force an advisor call) is emitted as a **normal command through `InputPort`** and applied via the core's `step`, **recorded like any other input** ([`50-llm-opponent.md`](../50-llm-opponent.md) §6). A debug-driven session therefore replays bit-for-bit. The overlay's *own* view state (which panels are open, scroll position) is adapter-local and never crosses the boundary. **This routing is what makes a debug UI compatible with I3.**
+- **Feature-gated: dev/verify-on, release-off.** The overlay and its `egui` dependency compile **only** under the `debug-hud` cargo feature — on for development and the `/verify` self-check (I5), **off in the default release build**. This answers "ship or dev-only": it is a **developer tool, absent from the default player binary**. When compiled in it is still **off unless enabled** at runtime, and toggled live via a hotkey (routed through `InputPort`).
+- **Config under the existing `render.*` root.** Its tunables (enable flag, per-panel toggles, hotkey, refresh cadence) live under **`render.hud.*`**. The `render.*` root already owns "HUD" ([`40-parameterisation.md`](../40-parameterisation.md) §2.2), so this introduces **no new namespace root**. The keys + schema land with the presentation adapter (phase 6), the way `ai.llm.*` landed with its adapter ([ADR 0014](./0014-ollama-local-llm-runtime.md)).
+- **Inside the renderer adapter, not a sibling.** Because the overlay needs the renderer's `wgpu` device/surface to draw, and **adapters must not import each other** ([`20-architecture.md`](../20-architecture.md) §5.3), it lives **inside** the renderer adapter crate under the `debug-hud` feature — not a separate crate that would have to import the renderer.
+
+**Out of scope for this ADR:** the concrete panel set and layout (feature/design work; visual tunables are `render.hud.*` config per I1); and any **non-graphical** diagnostics sink (a TUI or JSON dump) — if one is ever wanted it can reuse the same `DiagnosticsSnapshot` type, and *that* would get its own small port.
+
+## Consequences
+
+- **Positive:**
+  - **Blind debugging → an at-a-glance view** of sim + advisor + timing — the single biggest debugging lever for an agents-only project driving a real-time sim against a non-deterministic advisor. It complements the [0007](./0007-wgpu-rendering-framework.md) headless-PNG loop (visual state) and the [`50-llm-opponent.md`](../50-llm-opponent.md) §6 record–replay (advisor state).
+  - **Model-friendly, low-churn surface.** `egui` is immediate-mode and pure Rust: the UI is plain imperative Rust (`if ui.button(..).clicked()`) with **no retained scene graph or macro DSL to go stale** — the same "small, well-understood, low-churn integration models maintain reliably" criterion that chose `wgpu` ([0007](./0007-wgpu-rendering-framework.md)) and Ollama ([0014](./0014-ollama-local-llm-runtime.md)). It renders through the `wgpu` stack already present, so there is **no second GUI/render stack**.
+  - **Determinism preserved by construction** — read-only snapshot + actions-through-recorded-commands means a debug session is as reproducible as any other (I3), not a determinism exception.
+  - **Offline & private preserved** — `egui` is a local crate; the advisor panel shows locally-recorded I/O; no network, no telemetry (I7).
+  - **Nothing shipped by default** — excluded from the default release build; and when disabled at runtime the `DiagnosticsSnapshot` is not even assembled, so it is zero-cost and zero-influence on a normal session.
+- **Negative / trade-offs:**
+  - `egui` + `egui-wgpu` are **new adapter-layer dependencies** to pin and periodically re-evaluate (I8), and `egui` carries its own cross-version API drift — managed by pinning + Context7, exactly like `wgpu`.
+  - The renderer crate now carries a **feature-gated GUI concern**; kept isolated behind `debug-hud`, but it is extra surface in that crate.
+  - The "actions route through the recorded command path" rule is a **discipline point**: a direct-mutation shortcut in the overlay would silently break I3. It is stated here as a rule and is reviewable, but it is not machine-enforced the way an import direction is.
+- **Enforcement / gate impact:**
+  - `egui`/`egui-wgpu` are **confined to the renderer adapter**; `cargo-deny` is scoped so they (and their transitive trees) cannot leak into `core`/`config`/`ports`/`app` — mirroring the `wgpu` confinement in [ADR 0007](./0007-wgpu-rendering-framework.md).
+  - **The gate must not require the `debug-hud` feature or a GPU.** The default gate build excludes the feature; `DiagnosticsSnapshot` assembly is unit-tested with a **capturing double** (no GPU). An optional golden-image check of the overlay may use the headless-PNG path with **perceptual tolerance** — explicitly **not** I3 bit-equality, and never gating. This keeps `cargo gate` offline and reproducible (I9).
+  - **No new port and no new namespace root** → no boundary-checker or namespace-validator changes; `render.hud.*` keys join the config types + schema when the presentation adapter lands ([ADR 0008](./0008-toml-config-format-types-first-schema.md), phase 6).
+- **Docs to update (this change):** `decisions/README.md` (index row; #9 now resolved); [`20-architecture.md`](../20-architecture.md) (note the read-only debug overlay, the `DiagnosticsSnapshot` derived value, and the debug-action-through-command-path rule); [`0007-wgpu-rendering-framework.md`](./0007-wgpu-rendering-framework.md) (its deferred "own ADR" bullet now points here); `CLAUDE.md` (bootstrapping note: #9 resolved). No invariant changes.
+
+## Alternatives considered
+
+- **Logs only (`LoggingPort`), no HUD.** Rejected — the director asked for the overlay, and structured logs give no at-a-glance, *live* view of sim + advisor + timing while a real-time loop runs. Logs remain complementary (durable, greppable), not a substitute for the overlay.
+- **A privileged debug path with direct core read/mutation.** Rejected hard — it violates I2/I3/I4. The entire design point is a **read-only adapter** whose sim-affecting actions are routed through the *recorded* command path, so replay stays honest.
+- **A separate standalone diagnostics app/process** (e.g. a local web dashboard over a snapshot stream). Rejected for v1 — it adds a second process, a second stack, and an IPC surface, against the single-binary offline posture ([ADR 0005](./0005-macbook-only-offline-runtime.md)); an in-process overlay on the existing `wgpu` frame is simpler. The `DiagnosticsSnapshot` type is reusable, so this can be revisited if remote/headless inspection is ever needed.
+- **`imgui-rs` (Dear ImGui bindings).** Dear ImGui is *the* classic game debug HUD, but the Rust path is **FFI to a C++ library** — build/link complexity and a non-Rust dependency — whereas `egui` is pure Rust and native to the `wgpu`/`winit` stack. Rejected on the same Rust-native, model-competence grounds that shaped [ADR 0007](./0007-wgpu-rendering-framework.md).
+- **A retained-mode Rust GUI (`iced`) or native menus.** Heavier, with more UI state to manage, and a worse fit as an overlay drawn atop the game frame than immediate-mode `egui`. Rejected.

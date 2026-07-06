@@ -1,0 +1,8 @@
+# Blank issues stay enabled: agents capture work with a free-form `gh issue create`
+# (ADR 0012, "frictionless capture"). The templates above are for the UI and as a
+# fill-in spec.
+blank_issues_enabled: true
+contact_links:
+  - name: Propose an architectural decision (ADR)
+    url: https://github.com/eggman0131/Providence/blob/main/docs/decisions/README.md
+    about: Boundaries, ports, dependencies, determinism, the gate, or an invariant — these are decided by ADR, not an issue thread.

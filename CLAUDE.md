@@ -1,0 +1,87 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A single-player, offline, Mac-only god-game (working title "God"/"Providence") inspired by *Populous II*, whose opponent is driven by a **local LLM acting as a strategic advisor** to a deterministic engine. It has **no human code author** — AI agents build and maintain everything under a written contract, and the `docs/` suite *is* the governance, not a description of it. When code and the docs disagree, the docs win and the code is the defect.
+
+## Read before you act
+
+- **[`docs/30-ai-agent-contract.md`](docs/30-ai-agent-contract.md) is the constitution — load it for every task.** It defines the prime invariants (I1–I9), the Definition of Done, the workflow, and the precedence order for resolving conflicts. It is binding, not advisory.
+- **Apply the [Context Diet](docs/README.md#context-diet) — load the *minimum* docs a task needs.** [`docs/README.md`](docs/README.md) maps task type → which docs to load and which to skip. Reading the whole repo "to be safe" is context bloat and is explicitly discouraged. Don't restate the docs; link to them.
+- **Architectural changes require an ADR** in [`docs/decisions/`](docs/decisions/) (use [`template.md`](docs/decisions/template.md)). No silent changes to boundaries, ports, dependencies, namespaces, determinism, or the gate.
+
+## Commands
+
+The gate is the single definition of "green", identical locally and in CI. Everything routes through `cargo xtask` (aliases in [`.cargo/config.toml`](.cargo/config.toml)).
+
+```bash
+cargo xtask setup        # one-command environment provision (pinned toolchain, tools)
+cargo gate               # THE gate — run this before considering any task done
+cargo xtask schema       # check the committed config schema for drift
+cargo xtask schema --write   # regenerate docs/contracts/config.schema.json from the Rust types
+
+# Fast inner loop (not a substitute for the gate):
+cargo test --workspace                       # all tests, no coverage instrumentation
+cargo test -p providence-core --test replay  # the determinism / replay suite (I3)
+cargo test -p providence --test e2e          # end-to-end config→core tests
+cargo test -p <crate> <name-substring>       # a single test
+cargo clippy --workspace --all-targets -- -D warnings   # lint as the gate does
+```
+
+`cargo gate` runs, in order: format → clippy (`-D warnings`) → boundary check → magic-number check → schema drift → config validity → config-key integrity → `cargo deny` → tests + per-crate coverage. A red gate halts all forward work until fixed. The check implementations live in [`xtask/src/`](xtask/src/) (`boundary.rs`, `magic.rs`, `schema.rs`, `keys.rs`, `coverage.rs`).
+
+## Architecture
+
+Ports-and-adapters realised as a **Cargo workspace crate graph** ([`Cargo.toml`](Cargo.toml), [`docs/20-architecture.md`](docs/20-architecture.md)). Dependencies point **inward toward the deterministic core**; the core imports nothing outward; no cycles. This direction is enforced by the boundary checker, not by convention — an illegal import fails the gate.
+
+| Crate | Path | Role |
+|---|---|---|
+| `providence-core` | [`crates/core`](crates/core) | **Deterministic core.** `no_std`, pure, reproducible: same seed + inputs ⇒ identical output, forever. No clock, no I/O, no ambient randomness — all randomness flows through a seeded RNG port. Highest coverage bar. |
+| `providence-config` | [`crates/config`](crates/config) | Config value types (`Params`, sections). Types-first: the JSON schema is generated *from* these types, not hand-written. |
+| `providence-ports` | [`crates/ports`](crates/ports) | Port **interfaces** for every side effect (LLM, render, input, persistence, clock, RNG, …). Core depends on these, never on a concrete adapter. |
+| `providence-config-loader` | [`adapters/config-loader`](adapters/config-loader) | Adapter that loads/merges layered TOML into `Params` (`params_from_layers`, `load_dir`, deep-merge). |
+| `providence-app` | [`crates/app`](crates/app) | Application wiring. |
+| `providence` | [`crates/providence`](crates/providence) | Top-level binary; holds the end-to-end tests in [`tests/e2e.rs`](crates/providence/tests/e2e.rs). |
+| `xtask` | [`xtask`](xtask) | The gate and its checks (not shipped in the game). |
+
+**Config is data, not code** ([`docs/40-parameterisation.md`](docs/40-parameterisation.md)): tunable behaviour/balance/content lives in [`config/`](config) TOML, validated against [`docs/contracts/config.schema.json`](docs/contracts/config.schema.json), under mandatory dot-notation namespaces. A behavioural literal hard-coded in a source file is a "magic number" defect the gate rejects — add a config key + schema entry instead.
+
+## Non-negotiables when writing code
+
+These are the invariants most likely to bite; the full set is in the contract §2. A change that breaks one is a defect even if it "works":
+
+- **No magic numbers (I1).** Behaviour/balance/content → config + schema, never literals in code.
+- **Respect the boundary direction (I2/I4).** Everything with a side effect goes behind a port; the core stays pure and inward-facing.
+- **Preserve determinism (I3).** If you touch the core, keep/extend the replay test; never introduce wall-clock, randomness, or I/O there.
+- **Docs change in the same commit as behaviour (I6).** A stale doc is a defect. Architectural changes add an ADR.
+- **Done = gate green *and* actually run.** The Definition of Done (contract §3) requires the change to be exercised end-to-end and observed, not merely unit-tested.
+
+## Bootstrapping phase (important)
+
+The contract mandates **enforcement-first** ordering (§7): tooling before gameplay. **Phase 1 (the enforcement framework + gate) is complete and green on a placeholder codebase.** No domain/simulation/gameplay code may be authored ahead of the gate. Next phases, in dependency order: **(2) config/parameter layer → (3) deterministic core → (4) ports & adapters → (5) LLM strategic-advisor adapter → (6) presentation.** The LLM runtime & model is now decided — **Ollama**, baseline model `gemma4:26b-mlx` ([ADR 0014](docs/decisions/0014-ollama-local-llm-runtime.md), issue [#8](https://github.com/eggman0131/Providence/issues/8)). The debug/HUD UI is decided too — a **read-only, feature-gated `egui` overlay inside the renderer adapter** ([ADR 0015](docs/decisions/0015-debug-hud-ui-layer.md), issue [#9](https://github.com/eggman0131/Providence/issues/9)), built in phase 6 (presentation). No `adr-needed` issues are currently open.
+
+## Knowledge graph (navigation aid)
+
+A graphify knowledge graph of this repo lives in `graphify-out/` (gitignored, local nav aid: `graph.json`, `graph.html`, `GRAPH_REPORT.md`). Before re-reading docs to answer "how does X connect to Y" questions, prefer querying the existing graph: `graphify query "<question>"`.
+
+It stays current automatically via a **post-commit git hook** (all local, no API cost): pure-code commits get a fast AST rebuild; commits touching docs/ADRs trigger a local semantic re-extract through ollama (`qwen3.6:35b-mlx`), so the graph tracks the decision record. The hook needs **ollama running** at commit time; if it was down, refresh manually with `graphify extract . --backend ollama && graphify cluster-only . --backend ollama` (background log: `~/.cache/graphify-docs-rebuild.log`).
+
+## Document drift review (governance aid)
+
+An advisory **doc-drift review** ([ADR 0013](docs/decisions/0013-advisory-doc-drift-review-on-push.md)) enforces I6 (docs-as-code) as far as a judgement can be enforced — it never gates. It runs automatically via a **pre-push git hook** (all local, no API cost): a deterministic detector (`cargo xtask doc-review --json`) picks **which** governed docs a push may have staled and why (a doc↔code map in `doc-review.toml` + ADR cross-references + an I6 co-change catch-all), then a local **Qwen** model driven through **Cline** (`.clinerules/doc-drift-review.md` + workflow) judges **whether** drift is real and **which side is wrong** (doc vs code), and the orchestrator (`scripts/doc-review/run.sh`) opens a deduplicated `doc-drift`-labelled Issue. The LLM only advises; the deterministic engine actuates (the ADR 0002 split).
+
+The hook is **non-blocking** (detached; the push returns immediately) and needs **ollama running**, the `qwen3.6:35b-mlx` model, the **Cline** CLI configured against it, and an authenticated `gh`; if the core tools are missing it logs and skips. `cargo xtask setup` installs the hook; `PROVIDENCE_SKIP_DOC_REVIEW=1` disables it. Run it by hand — safe preview — with `scripts/doc-review/run.sh --dry-run` (background log: `~/.cache/providence-doc-review.log`).
+
+The advisor is pluggable (`--agent cline|claude`). When the **local** review comes back **inconclusive** (no parseable verdict — a *missed* review, not a "no drift" pass), the orchestrator says so loudly and prints a one-line re-run with the **online Claude Haiku** agent (`scripts/doc-review/run.sh --agent claude --range <a..b>`) — more reliable at the strict JSON contract. Local Qwen stays the default (offline, I7); the online agent is an explicit, dev-time escalation, never automatic and never a game-runtime dependency.
+
+## Project management
+
+Work tracking lives on GitHub ([ADR 0012](docs/decisions/0012-project-management-on-github.md)): tasks and bugs are **Issues**, the roadmap / "what's next" is the **Project board**, and *decisions* stay ADRs. Capture freely with `gh issue create` (labels: `area:*`, `phase:2..6`, `type:*`, `adr-needed`, and `doc-drift` for automated drift findings); link work↔code↔decision with `Fixes #N` / `Refs ADR-00NN`. If an issue needs an architectural decision, label it `adr-needed` and open an ADR — don't settle it in the thread. The board is advisory: it does **not** gate merges (the gate does).
+
+## Session handoff
+
+`HANDOFF.md` (repo root, gitignored) is a short, live record of the *current unfinished thread* of work — goal, the single next step, what's done/in-progress, uncommitted state + gate status, blockers, and pointers (branch/issue/ADR). It exists so work can resume fast after an interruption.
+
+**When resuming, read it first** (with `git status` and the current branch). **Keep it current** by updating it at the **end of a meaningful block of work — not after every step** (token-conscious; it aligns with wrapping up a reply). Keep it short and make the "Next step" line forward-looking so it stays useful even if the next block never started. It tracks *live* state only; durable work lives as GitHub issues and decisions as ADRs (see ADR 0012).

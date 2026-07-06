@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+description = "The gate (contract §9, ADR 0009): one command running every enforcement check"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Dev tooling, outside the runtime graph. May depend on the config-loader
+# (to regenerate/validate the schema) but never on core/app — the gate
+# checks the game; it is not part of it.
+[dependencies]
+providence-config-loader = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[lints]
+workspace = true

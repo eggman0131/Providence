@@ -1,0 +1,15 @@
+# Providence — built-in default configuration layer (ADR 0008).
+# Layer order: this file -> scenario/content pack -> local.toml (user
+# overrides, gitignored). Later layers override earlier ones by key.
+# Every key is schema-validated (docs/contracts/config.schema.json);
+# keys live under registered namespace roots (docs/40-parameterisation.md §2).
+
+[meta]
+# The schema version this file targets; mismatches trigger migration,
+# never a silent misread.
+schema_version = 1
+
+[sim.placeholder]
+# Phase-1 gate scaffolding (contract §7.2): proves the config -> core wiring
+# end-to-end. Deleted when the first real sim.* parameters land in Phase 2.
+tick_increment = 1

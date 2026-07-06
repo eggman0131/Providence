@@ -1,0 +1,12 @@
+[package]
+name = "providence-config"
+description = "Validated, immutable parameter types consumed by the deterministic core (no_std, zero dependencies)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Deliberately empty: this crate is plain data (docs/20-architecture.md §2.1).
+[dependencies]
+
+[lints]
+workspace = true

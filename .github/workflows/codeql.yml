@@ -1,0 +1,60 @@
+# Advisory, NON-GATING code scanning (CodeQL) — defense-in-depth reporting only
+# (ADR 0011). Correctness has exactly one arbiter: `cargo gate`, run locally or
+# in CI (I9 / ADR 0009 / ADR 0010 §2). This workflow only publishes findings to
+# the Security tab; it must NEVER be added as a required status check on `main`.
+# I9 forbids cloud-*exclusive* correctness *gates*, not advisory reporting.
+#
+# This is the ADVANCED code-scanning setup — keep GitHub's "default setup" OFF
+# (the two are mutually exclusive). Advanced is chosen so triggers, runner,
+# permissions, and build-mode are ours to control per ADR 0011.
+#
+# Triggers are push-to-main + weekly (no `pull_request`): it is not a merge
+# check, so it does not run per-PR — the gate already covers every PR, and this
+# keeps it visibly advisory. Add a `pull_request` trigger only if you want
+# pre-merge Security-tab visibility (it still must stay non-required).
+#
+# Runs on Linux, not the macOS target: this is static analysis of *source* with
+# no build, runtime, or determinism concern, so the aarch64-apple-darwin
+# target-match rule (ADR 0005/0006) does not apply and Linux keeps CI cheap.
+name: code-scanning
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1" # Mondays 04:23 UTC — weekly advisory drift check
+  workflow_dispatch:
+
+# Least privilege: only the write scope CodeQL needs to upload its results.
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # `rust` = first-party source; `actions` = the workflow files themselves
+        # (this is what flagged the missing-permissions hardening in ci.yml).
+        # Both use source-based extraction — no cargo build.
+        language: [rust, actions]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # Default (security) query suite. Bump to `security-extended` or
+          # `security-and-quality` if you want a wider net — quality lints are
+          # already the gate's job (clippy), so security-only is the default.
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -1,0 +1,48 @@
+#!/bin/sh
+# scripts/hooks/pre-push — the versioned pre-push hook body for the advisory
+# doc-drift review (ADR 0013). `cargo xtask setup` installs a thin shim into
+# .git/hooks/pre-push that delegates here, so this stays under version control.
+#
+# git invokes a pre-push hook with `<remote-name> <remote-url>` as arguments and
+# feeds the refs being pushed on stdin, one per line:
+#     <local-ref> <local-oid> <remote-ref> <remote-oid>
+#
+# This hook is **non-blocking**: it works out the base commit to diff against,
+# launches the review DETACHED (so `git push` returns immediately), and exits 0
+# unconditionally. It can never delay or abort a push. There is no post-push
+# hook in git; detaching from pre-push is how we stay out of the push's way.
+
+[ "${PROVIDENCE_SKIP_DOC_REVIEW:-0}" = "1" ] && exit 0
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+RUN="$ROOT/scripts/doc-review/run.sh"
+[ -f "$RUN" ] || exit 0
+
+# Base = the remote's current oid for the pushed branch; for a brand-new branch
+# (all-zero remote oid) fall back to origin/main. Skip deletes (zero local oid).
+BASE=""
+while read -r LOCAL_REF LOCAL_OID REMOTE_REF REMOTE_OID; do
+    [ -z "$LOCAL_REF" ] && continue
+    case "$LOCAL_OID" in *[!0]*) : ;; *) continue ;; esac
+    case "$REMOTE_OID" in *[!0]*) BASE="$REMOTE_OID" ;; *) BASE="" ;; esac
+    break
+done
+
+if [ -z "$BASE" ]; then
+    if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+        BASE="origin/main"
+    else
+        BASE="HEAD~1"
+    fi
+fi
+
+LOG="${HOME}/.cache/providence-doc-review.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+echo "----- doc-review push $(date 2>/dev/null) base=$BASE -----" >>"$LOG" 2>&1
+
+# Detached + stdin closed: the push proceeds while the review runs in the
+# background. `|| true` and the trailing exit 0 guarantee the push is never
+# blocked by this hook.
+nohup sh "$RUN" --since "$BASE" </dev/null >>"$LOG" 2>&1 &
+echo "[doc-review] launched background review (base=$BASE); log: $LOG"
+exit 0

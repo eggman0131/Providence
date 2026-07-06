@@ -1,0 +1,6 @@
+# Pinned toolchain (I9, ADR 0006/0009). Latest stable at time of pinning (I8).
+# Upgrades are deliberate: bump the version, run the gate, record in the PR.
+[toolchain]
+channel = "1.96.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+targets = ["aarch64-apple-darwin"]

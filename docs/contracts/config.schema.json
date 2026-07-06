@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigRoot",
+  "description": "Root of the authored configuration (all layers merged).",
+  "type": "object",
+  "properties": {
+    "meta": {
+      "description": "`meta.*` — config/schema versioning and provenance.",
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "description": "`meta.schema_version` — the schema this config targets; a mismatch\ntriggers the migration path, never a silent misread.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version"
+      ]
+    },
+    "sim": {
+      "description": "`sim.*` — deterministic-simulation parameters.",
+      "type": "object",
+      "properties": {
+        "placeholder": {
+          "description": "`sim.placeholder.*` — Phase-1 gate scaffolding (contract §7.2);\ndeleted when real `sim.*` parameters land in Phase 2.",
+          "type": "object",
+          "properties": {
+            "tick_increment": {
+              "description": "`sim.placeholder.tick_increment` — ticks the placeholder state\nadvances per step. Hot-reloadable (a pure balance value).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "tick_increment"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "placeholder"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "meta",
+    "sim"
+  ]
+}

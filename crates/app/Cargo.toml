@@ -1,0 +1,16 @@
+[package]
+name = "providence-app"
+description = "Application layer: session orchestration around the deterministic core (no game rules)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Application depends on core + config + port INTERFACES, never a concrete
+# adapter (docs/20-architecture.md §5 rule 2); enforced by the boundary check.
+[dependencies]
+providence-core = { workspace = true }
+providence-config = { workspace = true }
+providence-ports = { workspace = true }
+
+[lints]
+workspace = true

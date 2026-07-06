@@ -1,0 +1,19 @@
+[package]
+name = "providence-config-loader"
+description = "Config-loading adapter: layered TOML -> validated, immutable params (ADR 0008/0009)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Adapters depend on port interfaces + config data types + external libs;
+# never on other adapters (docs/20-architecture.md §5 rule 3).
+[dependencies]
+providence-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+schemars = { workspace = true }
+garde = { workspace = true }
+
+[lints]
+workspace = true

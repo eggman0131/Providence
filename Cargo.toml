@@ -1,0 +1,50 @@
+# Workspace realising the ports-and-adapters graph as a crate graph
+# (docs/20-architecture.md §5, ADR 0006). The boundary checker (ADR 0009)
+# enforces the allowed dependency edges; Cargo itself forbids cycles.
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/config",
+    "crates/ports",
+    "crates/app",
+    "crates/providence",
+    "adapters/config-loader",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# All versions pinned at latest stable at time of adoption (I8); exact
+# resolution recorded in Cargo.lock. Bumps arrive via Dependabot PRs gated
+# by CI (ADR 0010).
+[workspace.dependencies]
+providence-core = { path = "crates/core" }
+providence-config = { path = "crates/config" }
+providence-ports = { path = "crates/ports" }
+providence-app = { path = "crates/app" }
+providence-config-loader = { path = "adapters/config-loader" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+toml = "1.1.2"
+schemars = "1.2.1"
+garde = { version = "0.23.0", default-features = false, features = ["derive"] }
+syn = { version = "2.0.118", features = ["full", "visit", "parsing"] }
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+# Curated pedantic set (ADR 0009): the pedantic group at `warn` (promoted to
+# errors by the gate's `-D warnings`), minus documented low-signal exclusions.
+# Tuning this list is a normal reviewed change, not an ADR.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow" # crate-prefixed names are project convention
+must_use_candidate = "allow"      # too noisy on plain-data accessors
+missing_errors_doc = "allow"      # error enums are self-documenting via Display
+missing_panics_doc = "allow"      # gate code panics only on broken invariants

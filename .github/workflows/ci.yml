@@ -1,0 +1,46 @@
+# CI runs ONLY the canonical gate (ADR 0010): provisioning + `cargo gate`,
+# on Apple-Silicon macOS to match the sole supported target (ADR 0005/0006).
+# No bespoke CI-only checks — CI-green ⟺ local-gate-green by construction (I9).
+name: gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: the gate only reads the repo (checkout + build + test).
+# Not a check — hardening the GITHUB_TOKEN scope, compatible with "gate only".
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate
+    runs-on: macos-15 # Apple Silicon (arm64) — the only supported target
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned gate tools (versions owned by xtask/src/tools.rs; the cache
+      # key mirrors them so a version bump naturally rebuilds).
+      - name: Cache pinned gate tools
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-llvm-cov
+          key: gate-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/tools.rs') }}
+
+      - name: Cache cargo registry and advisory DB
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/advisory-dbs
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+
+      # The same two commands an agent runs locally (I9).
+      - name: Provision (cargo xtask setup)
+        run: cargo xtask setup
+
+      - name: Gate (cargo gate)
+        run: cargo gate

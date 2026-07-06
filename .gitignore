@@ -1,0 +1,30 @@
+# Rust / Cargo
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Coverage output (cargo-llvm-cov)
+/coverage/
+*.profraw
+*.profdata
+
+# Python bytecode cache (the doc-review orchestrator ships a small helper, ADR 0013)
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Claude Code local (machine-specific) settings — not shared
+.claude/settings.local.json
+
+# User-local config overrides layer (ADR 0008) — machine-specific, not shared
+/config/local.toml
+
+# graphify knowledge-graph artifact — regenerable local nav aid, rebuilt by the
+# post-commit hook (local ollama, no API cost). Not shared; un-ignore to version it.
+/graphify-out/
+
+# Live session handoff — ephemeral AI-managed working state, not project history.
+/HANDOFF.md
