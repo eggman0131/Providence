@@ -3,11 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-07-02
 - **Deciders:** Director + agent session
-- **Related:** [`../50-llm-opponent.md`](../50-llm-opponent.md) §7, [`../60-constraints.md`](../60-constraints.md), [`../40-parameterisation.md`](../40-parameterisation.md), [`0002`](./0002-llm-as-strategic-advisor.md), [`0004`](./0004-deterministic-core-ports-and-adapters.md), [`0005`](./0005-macbook-only-offline-runtime.md), [`0008`](./0008-toml-config-format-types-first-schema.md), [`0007`](./0007-wgpu-rendering-framework.md); resolves issue [#8](https://github.com/eggman0131/Providence/issues/8)
+- **Related:** [`../50-llm-opponent.md`](../50-llm-opponent.md) §7, [`../60-constraints.md`](../60-constraints.md), [`../40-parameterisation.md`](../40-parameterisation.md), [`0002`](./0002-llm-as-strategic-advisor.md), [`0004`](./0004-deterministic-core-ports-and-adapters.md), [`0005`](./0005-macbook-only-offline-runtime.md), [`0008`](./0008-toml-config-format-types-first-schema.md), [`0007`](./0007-wgpu-rendering-framework.md); resolves issue [#8](https://github.com/eggman0131/providence-legacy/issues/8)
 
 ## Context
 
-[ADR 0002](./0002-llm-as-strategic-advisor.md) fixed the opponent as a **strategic advisor** behind a single `LLMOpponentPort`, and [ADR 0005](./0005-macbook-only-offline-runtime.md) fixed a **Mac-only, offline** runtime with the model running locally. [`50-llm-opponent.md`](../50-llm-opponent.md) §7 deliberately deferred the concrete runtime/model to "the environment discussion" and an ADR, requiring only that a swap need "a new adapter + config, never a change to the core." This is that ADR (issue [#8](https://github.com/eggman0131/Providence/issues/8)).
+[ADR 0002](./0002-llm-as-strategic-advisor.md) fixed the opponent as a **strategic advisor** behind a single `LLMOpponentPort`, and [ADR 0005](./0005-macbook-only-offline-runtime.md) fixed a **Mac-only, offline** runtime with the model running locally. [`50-llm-opponent.md`](../50-llm-opponent.md) §7 deliberately deferred the concrete runtime/model to "the environment discussion" and an ADR, requiring only that a swap need "a new adapter + config, never a change to the core." This is that ADR (issue [#8](https://github.com/eggman0131/providence-legacy/issues/8)).
 
 Forces that bound the choice:
 

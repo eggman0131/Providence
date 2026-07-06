@@ -1,6 +1,6 @@
 # 0016 — Exploration lane and subsystem isolation
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-06
 - **Deciders:** Director + agent (fresh-start session)
 - **Related:** [`../30-ai-agent-contract.md`](../30-ai-agent-contract.md) (§3 Definition of Done, §6 enforcement, §7 phasing; I1, I3, I6), [`0009`](./0009-enforcement-tooling-and-the-gate.md) (the gate), [`0004`](./0004-deterministic-core-ports-and-adapters.md) (deterministic core, ports & adapters), [`0003`](./0003-parameterisation-first.md) (parameterisation-first), [`0008`](./0008-toml-config-format-types-first-schema.md) (config schema), [`../40-parameterisation.md`](../40-parameterisation.md)

@@ -28,17 +28,17 @@ This project has **no human code author**. It is built and maintained entirely b
 
 These are enforced by tooling wherever possible (§6). A change that breaks one is a defect regardless of whether it "works".
 
-- **I1 — Parameterisation-first.** All tunable behaviour, balance, and content lives in versioned, schema-validated configuration — never in code. A literal that affects behaviour/balance/content and is hard-coded in a source file is a defect ("magic number"). Litmus test: *could a designer change this without editing code?* If it should be yes, it must be config. See [`40-parameterisation.md`](./40-parameterisation.md).
+- **I1 — Parameterisation-first.** All tunable behaviour, balance, and content lives in versioned, schema-validated configuration — never in code. A literal that affects behaviour/balance/content and is hard-coded in a source file is a defect ("magic number"). Litmus test: *could a designer change this without editing code?* If it should be yes, it must be config. See [`40-parameterisation.md`](./40-parameterisation.md). *Scope:* relaxed on throwaway `explore/*` branches until promotion ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)).
 
 - **I2 — Modularity & boundaries.** The system is a set of small modules with explicit, one-directional dependencies. Dependencies point **inward** toward the deterministic core; the core imports nothing outward. No cyclic dependencies. Boundaries are enforced by tooling, not convention. See [`20-architecture.md`](./20-architecture.md).
 
-- **I3 — Deterministic core.** The simulation core is pure and reproducible: **same seed + same inputs ⇒ same outputs**, bit-for-bit, forever. No wall-clock reads, no ambient randomness, no hidden I/O, no network, no filesystem inside the core. All randomness flows through a seeded RNG port.
+- **I3 — Deterministic core.** The simulation core is pure and reproducible: **same seed + same inputs ⇒ same outputs**, bit-for-bit, forever. No wall-clock reads, no ambient randomness, no hidden I/O, no network, no filesystem inside the core. All randomness flows through a seeded RNG port. *Scope:* the guarantee covers the **committed (governed) configuration**; sandbox/exploration-only toggles sit outside the contract and cannot break replay ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)).
 
 - **I4 — Everything I/O behind ports.** Every side effect — LLM, rendering, input, persistence, clock, randomness, audio, logging — is reached only through an interface ("port") with swappable adapters and a test double. Core code depends on port *interfaces*, never on a concrete adapter.
 
 - **I5 — Tested & verified.** Every change ships with tests. The deterministic core carries the highest coverage bar. A task is **not done** until the full gate is green (§3) *and* the affected behaviour has been exercised end-to-end, not merely unit-tested.
 
-- **I6 — Docs-as-code.** Behaviour changes update the relevant doc in the same change. Architectural changes add an ADR (§5, §8). Docs and code must never drift; a stale doc is a defect.
+- **I6 — Docs-as-code.** Behaviour changes update the relevant doc in the same change. Architectural changes add an ADR (§5, §8). Docs and code must never drift; a stale doc is a defect. *Scope:* relaxed on throwaway `explore/*` branches until promotion, at which point the surviving change re-enters under full docs-as-code ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)).
 
 - **I7 — MacBook-only, offline-capable.** The only supported target is a single MacBook (Apple Silicon assumed until an ADR says otherwise). No runtime requires network access; the LLM runs locally. Do not add cloud/runtime-network dependencies. See [`60-constraints.md`](./60-constraints.md).
 
@@ -65,6 +65,8 @@ A change is **done** only when *all* of the following hold. This is a checklist 
 - [ ] **Verified** — the change was actually run and the intended effect observed, not just asserted by tests.
 
 The mechanised form of this list is **the gate**: a single command (§9) that runs every automatable check above. "Done" ⇒ the gate is green.
+
+> **Two lanes ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)).** The Definition of Done above governs work headed for `main`. A separate fast lane — `cargo xtask explore` (format + clippy only) — exists for throwaway probes on `explore/*` branches; it is **not** a Definition of Done and never closes a task. `explore/*` branches are never merged: a surviving idea is re-implemented on a governed branch and pays this checklist in full there.
 
 ---
 
@@ -98,8 +100,9 @@ Classify every change; the class dictates required ceremony:
 | **Trivial** | Typo, comment, doc wording, non-behavioural refactor with no boundary/API change. | Gate green. |
 | **Feature / balance** | New behaviour, new/changed parameters, new content, bug fix. | Gate green + tests + docs updated. |
 | **Architectural** | New/changed module boundary, new port, new dependency, new namespace root, change to determinism or the enforcement framework, or any change to an invariant. | Gate green + tests + docs + **an ADR** (§8). |
+| **Exploration** | A throwaway probe on an `explore/*` branch — feeling out a mechanic; **never merged to `main`**. | `cargo xtask explore` green (fmt + clippy); exempt from I1/I6 until promotion ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)). |
 
-When in doubt, treat it as the heavier class.
+When in doubt, treat it as the heavier class. **Exploration is never a default** — you are in it only by deliberately working on an `explore/*` branch ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)).
 
 ---
 
@@ -160,4 +163,4 @@ Each phase leaves the gate green. A red gate halts all forward work until fixed.
 
 ## 9. The gate (reference)
 
-The gate is the executable form of §3 and §6.2. Its command is **`cargo gate`** (an `xtask` binary; fixed by [ADR 0009](./decisions/0009-enforcement-tooling-and-the-gate.md)). Every task ends by running the gate and making it green. If a check cannot yet be automated, that gap is tracked as a defect against §6.1.
+The gate is the executable form of §3 and §6.2. Its command is **`cargo gate`** (an `xtask` binary; fixed by [ADR 0009](./decisions/0009-enforcement-tooling-and-the-gate.md)). Every task ends by running the gate and making it green. A separate fast lane — **`cargo xtask explore`** (format + clippy only) — exists for `explore/*` probes ([ADR 0016](./decisions/0016-exploration-lane-and-subsystem-isolation.md)); it is deliberately *not* the gate and never closes a task. If a check cannot yet be automated, that gap is tracked as a defect against §6.1.

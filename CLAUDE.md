@@ -19,6 +19,7 @@ The gate is the single definition of "green", identical locally and in CI. Every
 ```bash
 cargo xtask setup        # one-command environment provision (pinned toolchain, tools)
 cargo gate               # THE gate — run this before considering any task done
+cargo xtask explore      # fast lane (fmt + clippy) for explore/* probes — NOT the gate (ADR 0016)
 cargo xtask schema       # check the committed config schema for drift
 cargo xtask schema --write   # regenerate docs/contracts/config.schema.json from the Rust types
 
@@ -60,7 +61,7 @@ These are the invariants most likely to bite; the full set is in the contract §
 
 ## Bootstrapping phase (important)
 
-The contract mandates **enforcement-first** ordering (§7): tooling before gameplay. **Phase 1 (the enforcement framework + gate) is complete and green on a placeholder codebase.** No domain/simulation/gameplay code may be authored ahead of the gate. Next phases, in dependency order: **(2) config/parameter layer → (3) deterministic core → (4) ports & adapters → (5) LLM strategic-advisor adapter → (6) presentation.** The LLM runtime & model is now decided — **Ollama**, baseline model `gemma4:26b-mlx` ([ADR 0014](docs/decisions/0014-ollama-local-llm-runtime.md), issue [#8](https://github.com/eggman0131/Providence/issues/8)). The debug/HUD UI is decided too — a **read-only, feature-gated `egui` overlay inside the renderer adapter** ([ADR 0015](docs/decisions/0015-debug-hud-ui-layer.md), issue [#9](https://github.com/eggman0131/Providence/issues/9)), built in phase 6 (presentation). No `adr-needed` issues are currently open.
+The contract mandates **enforcement-first** ordering (§7): tooling before gameplay. **Phase 1 (the enforcement framework + gate) is complete and green on a placeholder codebase.** No domain/simulation/gameplay code may be authored ahead of the gate. Next phases, in dependency order: **(2) config/parameter layer → (3) deterministic core → (4) ports & adapters → (5) LLM strategic-advisor adapter → (6) presentation.** The LLM runtime & model is now decided — **Ollama**, baseline model `gemma4:26b-mlx` ([ADR 0014](docs/decisions/0014-ollama-local-llm-runtime.md), issue [#8](https://github.com/eggman0131/providence-legacy/issues/8)). The debug/HUD UI is decided too — a **read-only, feature-gated `egui` overlay inside the renderer adapter** ([ADR 0015](docs/decisions/0015-debug-hud-ui-layer.md), issue [#9](https://github.com/eggman0131/providence-legacy/issues/9)), built in phase 6 (presentation). No `adr-needed` issues are currently open.
 
 ## Knowledge graph (navigation aid)
 

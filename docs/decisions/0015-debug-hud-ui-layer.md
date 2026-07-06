@@ -3,11 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-07-02
 - **Deciders:** Director + agent session
-- **Related:** [`../20-architecture.md`](../20-architecture.md) §4–5, [`../50-llm-opponent.md`](../50-llm-opponent.md) §6, [`../40-parameterisation.md`](../40-parameterisation.md) §2, [`../60-constraints.md`](../60-constraints.md), [`0002`](./0002-llm-as-strategic-advisor.md), [`0004`](./0004-deterministic-core-ports-and-adapters.md), [`0005`](./0005-macbook-only-offline-runtime.md), [`0007`](./0007-wgpu-rendering-framework.md), [`0008`](./0008-toml-config-format-types-first-schema.md), [`0014`](./0014-ollama-local-llm-runtime.md); resolves issue [#9](https://github.com/eggman0131/Providence/issues/9)
+- **Related:** [`../20-architecture.md`](../20-architecture.md) §4–5, [`../50-llm-opponent.md`](../50-llm-opponent.md) §6, [`../40-parameterisation.md`](../40-parameterisation.md) §2, [`../60-constraints.md`](../60-constraints.md), [`0002`](./0002-llm-as-strategic-advisor.md), [`0004`](./0004-deterministic-core-ports-and-adapters.md), [`0005`](./0005-macbook-only-offline-runtime.md), [`0007`](./0007-wgpu-rendering-framework.md), [`0008`](./0008-toml-config-format-types-first-schema.md), [`0014`](./0014-ollama-local-llm-runtime.md); resolves issue [#9](https://github.com/eggman0131/providence-legacy/issues/9)
 
 ## Context
 
-[ADR 0007](./0007-wgpu-rendering-framework.md) deliberately deferred "any separate **debug/HUD UI** layer (e.g. an immediate-mode `egui` overlay), which, if added, gets its own ADR." Issue [#9](https://github.com/eggman0131/Providence/issues/9) posed that question — a developer-facing overlay for sim state, seed/RNG, LLM advisor I/O, and timings — and flagged the three architectural sub-questions it raises: is it presentation or a privileged surface, is it read-only-through-a-port or a debug backdoor, and does it ship. The director has decided **yes, build it**. This ADR is that decision and fixes those three boundaries.
+[ADR 0007](./0007-wgpu-rendering-framework.md) deliberately deferred "any separate **debug/HUD UI** layer (e.g. an immediate-mode `egui` overlay), which, if added, gets its own ADR." Issue [#9](https://github.com/eggman0131/providence-legacy/issues/9) posed that question — a developer-facing overlay for sim state, seed/RNG, LLM advisor I/O, and timings — and flagged the three architectural sub-questions it raises: is it presentation or a privileged surface, is it read-only-through-a-port or a debug backdoor, and does it ship. The director has decided **yes, build it**. This ADR is that decision and fixes those three boundaries.
 
 Forces that bound the choice:
 
