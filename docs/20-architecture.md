@@ -54,7 +54,7 @@ Validated, schema-checked data — **no logic**. Loaded and validated at startup
 
 ### 2.2 Deterministic core
 The heart of the game. Pure functions and immutable-by-default state. Contains:
-- **World & terrain** — the grid of terrain cells, heights, water, land-shaping operations.
+- **World & terrain** — an integer height field sampled at grid **vertices** (corners), water, and land-shaping operations that cascade to preserve the step invariant ([ADR 0017](./decisions/0017-vertex-heightfield-terrain.md)).
 - **Population / followers** — followers, settlements, growth, allegiance.
 - **Economy** — the faith/mana resource: generation, storage, spend.
 - **Powers** — divine interventions (data-defined) and their effects on world/population.

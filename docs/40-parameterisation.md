@@ -60,7 +60,7 @@ meta.schema_version
 What lives where (illustrative, not exhaustive; every gameplay number ends up under one of these):
 
 - **`sim.worldgen.*`** — map size, seed handling, terrain generation rates, sea level, initial settlement placement.
-- **`sim.terrain.*`** — land-shaping costs/limits, max/min height, slope rules, water spread.
+- **`sim.terrain.*`** — land-shaping costs/limits; the step invariant `max_step` (default 1) and `max_height`/`min_height`; water spread. The vertex height-field model these govern is fixed by [ADR 0017](./decisions/0017-vertex-heightfield-terrain.md); `max_step`/`max_height` are structural (load-time, not hot-reloadable).
 - **`sim.economy.*`** — faith/mana regeneration, storage caps, spend rules, worship yield per follower.
 - **`sim.population.*`** — follower growth, housing capacity, migration, allegiance/conversion rates.
 - **`sim.rules.*`** — tick length, action ordering, per-turn limits.
