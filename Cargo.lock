@@ -110,6 +110,8 @@ dependencies = [
  "providence-config",
  "providence-config-loader",
  "providence-core",
+ "providence-ports",
+ "providence-renderer",
 ]
 
 [[package]]
@@ -147,6 +149,14 @@ dependencies = [
 [[package]]
 name = "providence-ports"
 version = "0.1.0"
+
+[[package]]
+name = "providence-renderer"
+version = "0.1.0"
+dependencies = [
+ "providence-config",
+ "providence-ports",
+]
 
 [[package]]
 name = "quote"

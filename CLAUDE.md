@@ -50,9 +50,10 @@ Ports-and-adapters realised as a **Cargo workspace crate graph** ([`Cargo.toml`]
 | Crate | Path | Role |
 |---|---|---|
 | `providence-core` | [`crates/core`](crates/core) | **Deterministic core.** `no_std`, pure, reproducible: same seed + inputs ⇒ identical output, forever. No clock, no I/O, no ambient randomness — all randomness flows through a seeded RNG port. Highest coverage bar. |
-| `providence-config` | [`crates/config`](crates/config) | Config value types (`Params`, sections). Types-first: the JSON schema is generated *from* these types, not hand-written. |
-| `providence-ports` | [`crates/ports`](crates/ports) | Port **interfaces** for every side effect (LLM, render, input, persistence, clock, RNG, …). Core depends on these, never on a concrete adapter. |
-| `providence-config-loader` | [`adapters/config-loader`](adapters/config-loader) | Adapter that loads/merges layered TOML into `Params` (`params_from_layers`, `load_dir`, deep-merge). |
+| `providence-config` | [`crates/config`](crates/config) | Config value types (`Params` for the core; standalone `RenderParams` for presentation, ADR 0020). Types-first: the JSON schema is generated *from* these types, not hand-written. |
+| `providence-ports` | [`crates/ports`](crates/ports) | Port **interfaces** for every side effect (LLM, render, input, persistence, clock, RNG, …) plus the DTOs they hand across (e.g. `RendererPort` + the `TerrainFrame` snapshot, ADR 0020). Core depends on these, never on a concrete adapter. |
+| `providence-config-loader` | [`adapters/config-loader`](adapters/config-loader) | Adapter that loads/merges layered TOML into `Params` (`params_from_layers`, `load_dir`) and projects `render.*` into `RenderParams` (`load_render`), deep-merge. |
+| `providence-renderer` | [`adapters/renderer`](adapters/renderer) | **Workbench renderer adapter** ([ADR 0020](docs/decisions/0020-workbench-runtime-and-rendererport.md)): realises `RendererPort`, drawing a derived `TerrainFrame`; the camera is adapter-local view state. `wgpu`/`winit` land in issue #8 Phase 1, confined here. |
 | `providence-app` | [`crates/app`](crates/app) | Application wiring. |
 | `providence` | [`crates/providence`](crates/providence) | Top-level binary; holds the end-to-end tests in [`tests/e2e.rs`](crates/providence/tests/e2e.rs). |
 | `xtask` | [`xtask`](xtask) | The gate and its checks (not shipped in the game). |

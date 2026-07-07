@@ -10,6 +10,7 @@ members = [
     "crates/app",
     "crates/providence",
     "adapters/config-loader",
+    "adapters/renderer",
     "xtask",
 ]
 
@@ -27,6 +28,7 @@ providence-config = { path = "crates/config" }
 providence-ports = { path = "crates/ports" }
 providence-app = { path = "crates/app" }
 providence-config-loader = { path = "adapters/config-loader" }
+providence-renderer = { path = "adapters/renderer" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 toml = "1.1.2"

@@ -20,6 +20,154 @@
         "schema_version"
       ]
     },
+    "render": {
+      "description": "`render.*` — presentation parameters for the workbench renderer\n(ADR 0020 §4). Projected into a standalone [`RenderParams`] — **not**\ninto the core-injected [`Params`], because presentation is outside the\ndeterminism boundary (docs/40-parameterisation.md §2.2).",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "`render.background.*` — the surface the world is drawn against.",
+          "type": "object",
+          "properties": {
+            "rgb": {
+              "description": "`render.background.rgb` — clear colour, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "rgb"
+          ]
+        },
+        "camera": {
+          "description": "`render.camera.*` — the view camera.",
+          "type": "object",
+          "properties": {
+            "far": {
+              "description": "`render.camera.far` — far clip-plane distance.",
+              "type": "number",
+              "format": "float"
+            },
+            "fov_degrees": {
+              "description": "`render.camera.fov_degrees` — vertical field of view, in degrees.",
+              "type": "number",
+              "format": "float",
+              "maximum": 179.0,
+              "minimum": 1.0
+            },
+            "initial_distance": {
+              "description": "`render.camera.initial_distance` — starting orbit distance from target.",
+              "type": "number",
+              "format": "float"
+            },
+            "initial_pitch_degrees": {
+              "description": "`render.camera.initial_pitch_degrees` — starting orbit pitch, in degrees.",
+              "type": "number",
+              "format": "float"
+            },
+            "initial_yaw_degrees": {
+              "description": "`render.camera.initial_yaw_degrees` — starting orbit yaw, in degrees.",
+              "type": "number",
+              "format": "float"
+            },
+            "near": {
+              "description": "`render.camera.near` — near clip-plane distance.",
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "fov_degrees",
+            "near",
+            "far",
+            "initial_distance",
+            "initial_yaw_degrees",
+            "initial_pitch_degrees"
+          ]
+        },
+        "lighting": {
+          "description": "`render.lighting.*` — the directional light shading the surface.",
+          "type": "object",
+          "properties": {
+            "ambient": {
+              "description": "`render.lighting.ambient` — ambient light fraction in `[0, 1]`.",
+              "type": "number",
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "azimuth_degrees": {
+              "description": "`render.lighting.azimuth_degrees` — light compass direction, in degrees.",
+              "type": "number",
+              "format": "float"
+            },
+            "diffuse": {
+              "description": "`render.lighting.diffuse` — diffuse light fraction in `[0, 1]`.",
+              "type": "number",
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "elevation_degrees": {
+              "description": "`render.lighting.elevation_degrees` — light angle above the horizon.",
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "azimuth_degrees",
+            "elevation_degrees",
+            "ambient",
+            "diffuse"
+          ]
+        },
+        "palette": {
+          "description": "`render.palette.*` — how vertex height maps to colour.",
+          "type": "object",
+          "properties": {
+            "high_rgb": {
+              "description": "`render.palette.high_rgb` — colour at the highest drawn height, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "low_rgb": {
+              "description": "`render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "low_rgb",
+            "high_rgb"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "camera",
+        "lighting",
+        "palette",
+        "background"
+      ]
+    },
     "sim": {
       "description": "`sim.*` — deterministic-simulation parameters.",
       "type": "object",
@@ -162,6 +310,7 @@
   "additionalProperties": false,
   "required": [
     "meta",
-    "sim"
+    "sim",
+    "render"
   ]
 }

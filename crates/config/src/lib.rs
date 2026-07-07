@@ -132,3 +132,74 @@ pub struct PlaceholderParams {
     /// advances per step.
     pub tick_increment: u64,
 }
+
+/// `render.*` — presentation parameters for the workbench renderer (ADR 0020
+/// §4).
+///
+/// Deliberately **not** a field of [`Params`]: presentation is
+/// non-deterministic and must never cross into the core
+/// (docs/40-parameterisation.md §2.2). The `config-loader` projects `render.*`
+/// into this standalone type and hands it to the renderer adapter, never to
+/// the core. Because its values are floats it derives no `Eq` (unlike the core
+/// [`Params`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderParams {
+    /// `render.camera.*` — the view camera.
+    pub camera: CameraParams,
+    /// `render.lighting.*` — the directional light shading the surface.
+    pub lighting: LightingParams,
+    /// `render.palette.*` — how vertex height maps to colour.
+    pub palette: PaletteParams,
+    /// `render.background.*` — the surface the world is drawn against.
+    pub background: BackgroundParams,
+}
+
+/// `render.camera.*` — the workbench view camera (ADR 0020 §3). The camera is
+/// adapter-local view state; these are only its **initial** pose and its
+/// projection limits (orbit/pan/zoom bounds arrive in issue #8 Phase 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraParams {
+    /// `render.camera.fov_degrees` — vertical field of view, in degrees.
+    pub fov_degrees: f32,
+    /// `render.camera.near` — near clip-plane distance.
+    pub near: f32,
+    /// `render.camera.far` — far clip-plane distance.
+    pub far: f32,
+    /// `render.camera.initial_distance` — starting orbit distance from target.
+    pub initial_distance: f32,
+    /// `render.camera.initial_yaw_degrees` — starting orbit yaw, in degrees.
+    pub initial_yaw_degrees: f32,
+    /// `render.camera.initial_pitch_degrees` — starting orbit pitch, in degrees.
+    pub initial_pitch_degrees: f32,
+}
+
+/// `render.lighting.*` — a single directional light plus ambient fill, enough
+/// to read the flat-shaded stepped faces (ADR 0020; issue #8 Phase 1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LightingParams {
+    /// `render.lighting.azimuth_degrees` — light compass direction, in degrees.
+    pub azimuth_degrees: f32,
+    /// `render.lighting.elevation_degrees` — light angle above the horizon.
+    pub elevation_degrees: f32,
+    /// `render.lighting.ambient` — ambient light fraction in `[0, 1]`.
+    pub ambient: f32,
+    /// `render.lighting.diffuse` — diffuse light fraction in `[0, 1]`.
+    pub diffuse: f32,
+}
+
+/// `render.palette.*` — vertex height → colour, lerped from `low_rgb` at the
+/// lowest drawn height to `high_rgb` at the highest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaletteParams {
+    /// `render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.
+    pub low_rgb: [f32; 3],
+    /// `render.palette.high_rgb` — colour at the highest drawn height, linear RGB.
+    pub high_rgb: [f32; 3],
+}
+
+/// `render.background.*` — the clear colour the world is drawn against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundParams {
+    /// `render.background.rgb` — clear colour, linear RGB.
+    pub rgb: [f32; 3],
+}

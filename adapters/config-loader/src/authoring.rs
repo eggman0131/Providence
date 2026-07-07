@@ -8,8 +8,9 @@
 
 use garde::Validate;
 use providence_config::{
-    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, RaiseParams,
-    SimParams, TerrainParams, WinLossParams,
+    BackgroundParams, CameraParams, EconomyParams, LightingParams, ManaMode, ManaParams,
+    OpponentParams, PaletteParams, Params, PlaceholderParams, RaiseParams, RenderParams, SimParams,
+    TerrainParams, WinLossParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -24,6 +25,12 @@ pub struct ConfigRoot {
     /// `sim.*` — deterministic-simulation parameters.
     #[garde(dive)]
     pub sim: SimSection,
+    /// `render.*` — presentation parameters for the workbench renderer
+    /// (ADR 0020 §4). Projected into a standalone [`RenderParams`] — **not**
+    /// into the core-injected [`Params`], because presentation is outside the
+    /// determinism boundary (docs/40-parameterisation.md §2.2).
+    #[garde(dive)]
+    pub render: RenderSection,
 }
 
 /// `meta.*` (docs/40-parameterisation.md §2.2).
@@ -151,6 +158,90 @@ pub struct PlaceholderSection {
     pub tick_increment: u64,
 }
 
+/// `render.*` (docs/40-parameterisation.md §2.2) — presentation config for the
+/// workbench renderer. Outside the determinism boundary; projected into
+/// [`RenderParams`] via [`ConfigRoot::into_render_params`], never into the
+/// core-injected [`Params`] (ADR 0020 §4).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RenderSection {
+    /// `render.camera.*` — the view camera.
+    #[garde(dive)]
+    pub camera: CameraSection,
+    /// `render.lighting.*` — the directional light shading the surface.
+    #[garde(dive)]
+    pub lighting: LightingSection,
+    /// `render.palette.*` — how vertex height maps to colour.
+    #[garde(dive)]
+    pub palette: PaletteSection,
+    /// `render.background.*` — the surface the world is drawn against.
+    #[garde(dive)]
+    pub background: BackgroundSection,
+}
+
+/// `render.camera.*` — the workbench view camera (ADR 0020 §3).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct CameraSection {
+    /// `render.camera.fov_degrees` — vertical field of view, in degrees.
+    #[garde(range(min = 1.0, max = 179.0))]
+    pub fov_degrees: f32,
+    /// `render.camera.near` — near clip-plane distance.
+    #[garde(skip)]
+    pub near: f32,
+    /// `render.camera.far` — far clip-plane distance.
+    #[garde(skip)]
+    pub far: f32,
+    /// `render.camera.initial_distance` — starting orbit distance from target.
+    #[garde(skip)]
+    pub initial_distance: f32,
+    /// `render.camera.initial_yaw_degrees` — starting orbit yaw, in degrees.
+    #[garde(skip)]
+    pub initial_yaw_degrees: f32,
+    /// `render.camera.initial_pitch_degrees` — starting orbit pitch, in degrees.
+    #[garde(skip)]
+    pub initial_pitch_degrees: f32,
+}
+
+/// `render.lighting.*` — one directional light plus ambient fill (ADR 0020).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct LightingSection {
+    /// `render.lighting.azimuth_degrees` — light compass direction, in degrees.
+    #[garde(skip)]
+    pub azimuth_degrees: f32,
+    /// `render.lighting.elevation_degrees` — light angle above the horizon.
+    #[garde(skip)]
+    pub elevation_degrees: f32,
+    /// `render.lighting.ambient` — ambient light fraction in `[0, 1]`.
+    #[garde(range(min = 0.0, max = 1.0))]
+    pub ambient: f32,
+    /// `render.lighting.diffuse` — diffuse light fraction in `[0, 1]`.
+    #[garde(range(min = 0.0, max = 1.0))]
+    pub diffuse: f32,
+}
+
+/// `render.palette.*` — vertex height → colour, lerped low→high (ADR 0020).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct PaletteSection {
+    /// `render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.
+    #[garde(skip)]
+    pub low_rgb: [f32; 3],
+    /// `render.palette.high_rgb` — colour at the highest drawn height, linear RGB.
+    #[garde(skip)]
+    pub high_rgb: [f32; 3],
+}
+
+/// `render.background.*` — the clear colour the world is drawn against.
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundSection {
+    /// `render.background.rgb` — clear colour, linear RGB.
+    #[garde(skip)]
+    pub rgb: [f32; 3],
+}
+
 impl ConfigRoot {
     /// Map the validated authoring config into the immutable `no_std`
     /// params the core consumes. Purely mechanical; covered by tests.
@@ -179,6 +270,37 @@ impl ConfigRoot {
                 placeholder: PlaceholderParams {
                     tick_increment: self.sim.placeholder.tick_increment,
                 },
+            },
+        }
+    }
+
+    /// Project the validated `render.*` config into the standalone
+    /// [`RenderParams`] the renderer adapter consumes (ADR 0020 §4). Separate
+    /// from [`into_params`](Self::into_params) so presentation config never
+    /// travels with the core's [`Params`]. Purely mechanical; covered by tests.
+    #[must_use]
+    pub fn into_render_params(self) -> RenderParams {
+        RenderParams {
+            camera: CameraParams {
+                fov_degrees: self.render.camera.fov_degrees,
+                near: self.render.camera.near,
+                far: self.render.camera.far,
+                initial_distance: self.render.camera.initial_distance,
+                initial_yaw_degrees: self.render.camera.initial_yaw_degrees,
+                initial_pitch_degrees: self.render.camera.initial_pitch_degrees,
+            },
+            lighting: LightingParams {
+                azimuth_degrees: self.render.lighting.azimuth_degrees,
+                elevation_degrees: self.render.lighting.elevation_degrees,
+                ambient: self.render.lighting.ambient,
+                diffuse: self.render.lighting.diffuse,
+            },
+            palette: PaletteParams {
+                low_rgb: self.render.palette.low_rgb,
+                high_rgb: self.render.palette.high_rgb,
+            },
+            background: BackgroundParams {
+                rgb: self.render.background.rgb,
             },
         }
     }
