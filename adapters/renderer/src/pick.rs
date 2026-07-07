@@ -78,6 +78,26 @@ pub fn reticle_ray(camera: &Camera, aspect: f32) -> Ray {
     screen_ray(camera, aspect, [0.0, 0.0])
 }
 
+/// Convert a cursor position in **physical pixels** (origin top-left, y down —
+/// `winit`'s convention) into the normalised device coordinate [`screen_ray`]
+/// expects: `[0, 0]` is the screen centre, `[-1, -1]` the bottom-left, `[1, 1]`
+/// the top-right (y up). This is the cursor-tracked generalisation of the
+/// Phase-3 reticle: issue #9 picks the vertex under the *live cursor*, not just
+/// the centre. A degenerate zero-sized surface maps to the centre.
+#[must_use]
+pub fn cursor_ndc(cursor_px: (f32, f32), size: (u32, u32)) -> [f32; 2] {
+    let (px, py) = cursor_px;
+    let (width, height) = size;
+    if width == 0 || height == 0 {
+        return [0.0, 0.0];
+    }
+    [
+        2.0 * px / width as f32 - 1.0,
+        // Flip y: pixels grow downward, NDC grows upward.
+        1.0 - 2.0 * py / height as f32,
+    ]
+}
+
 /// The world-space ray from the camera through a point given in normalised
 /// device coordinates: `ndc = [0, 0]` is the screen centre, `[-1, -1]` the
 /// bottom-left, `[1, 1]` the top-right (y up). This is the general form #9
@@ -155,7 +175,7 @@ pub fn pick_vertex(
 
 #[cfg(test)]
 mod tests {
-    use super::{PickedVertex, pick_vertex, reticle_ray, screen_ray};
+    use super::{PickedVertex, cursor_ndc, pick_vertex, reticle_ray, screen_ray};
     use crate::camera::Camera;
     use crate::math::{dot, normalize, sub};
     use providence_ports::TerrainFrame;
@@ -252,5 +272,52 @@ mod tests {
         let frame = TerrainFrame::new(0, 0, &[]);
         let ray = reticle_ray(&top_down(20.0), 1.0);
         assert_eq!(pick_vertex(&ray, &frame, 1.0), None);
+    }
+
+    #[test]
+    fn the_screen_centre_pixel_maps_to_the_ndc_origin() {
+        // A cursor at the middle of an 800×600 surface is the reticle ([0, 0]),
+        // so cursor picking through the centre agrees with reticle_ray.
+        let ndc = cursor_ndc((400.0, 300.0), (800, 600));
+        assert!(
+            approx(ndc[0], 0.0) && approx(ndc[1], 0.0),
+            "centre → origin"
+        );
+    }
+
+    #[test]
+    fn cursor_ndc_flips_y_and_spans_the_corners() {
+        // Top-left pixel → NDC (-1, +1); bottom-right → (+1, -1) (y is flipped
+        // because pixels grow downward while NDC grows upward).
+        let top_left = cursor_ndc((0.0, 0.0), (800, 600));
+        assert!(approx(top_left[0], -1.0) && approx(top_left[1], 1.0));
+        let bottom_right = cursor_ndc((800.0, 600.0), (800, 600));
+        assert!(approx(bottom_right[0], 1.0) && approx(bottom_right[1], -1.0));
+    }
+
+    #[test]
+    fn a_zero_sized_surface_maps_to_the_centre() {
+        let ndc = cursor_ndc((10.0, 10.0), (0, 0));
+        assert!(
+            approx(ndc[0], 0.0) && approx(ndc[1], 0.0),
+            "degenerate → centre"
+        );
+    }
+
+    #[test]
+    fn a_cursor_left_of_centre_picks_a_left_vertex() {
+        // Looking straight down with up = −z, world +x is the camera's right.
+        // A cursor left of centre casts a ray leaning −x, so it picks a vertex
+        // on the −x (left) side — the cursor-tracked pick issue #9 needs.
+        let heights = [0; 9];
+        let frame = TerrainFrame::new(3, 3, &heights);
+        let camera = top_down(20.0);
+        let ndc = cursor_ndc((100.0, 300.0), (800, 600)); // well left of centre
+        let ray = screen_ray(&camera, 800.0 / 600.0, ndc);
+        let picked = pick_vertex(&ray, &frame, 1.0).expect("a vertex is under the cursor");
+        assert!(
+            picked.x < 1,
+            "a left-of-centre cursor resolves to a left column"
+        );
     }
 }

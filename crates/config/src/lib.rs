@@ -411,3 +411,52 @@ pub struct HudParams {
     /// and height of the vertex under the screen centre).
     pub show_reticle: bool,
 }
+
+/// `input.*` — input mapping & sensitivities for the interactive workbench
+/// (ADR 0022; issue #9 Phase 2).
+///
+/// Like [`RenderParams`], a standalone projection that sits **outside** the
+/// determinism boundary (docs/40-parameterisation.md §2.2): input bindings are
+/// presentation/UX, never a core [`Params`] field. The `config-loader` projects
+/// `input.*` into this type and hands it to the renderer adapter, which turns a
+/// mouse gesture into a discrete `TerrainCommand`. The command it produces is
+/// integer and replayable (I3); only the *binding* — which button, how far is a
+/// click — lives here. Because it carries a float sensitivity it derives no
+/// `Eq` (like [`RenderParams`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputParams {
+    /// `input.shape.*` — the terrain-shaping controls.
+    pub shape: ShapeInputParams,
+}
+
+/// `input.shape.*` — how a mouse gesture shapes the land (ADR 0022, the
+/// Director's control-scheme ruling): which button raises the picked vertex,
+/// which lowers it, and the click-vs-drag motion threshold that tells a shaping
+/// *click* from a camera *drag*.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeInputParams {
+    /// `input.shape.raise_button` — the pointer button that raises the picked
+    /// vertex by one step (its cascade rippling outward, ADR 0017 §3).
+    pub raise_button: PointerButton,
+    /// `input.shape.lower_button` — the pointer button that lowers it — the
+    /// mirror of `raise_button`.
+    pub lower_button: PointerButton,
+    /// `input.shape.click_drag_threshold_px` — the largest accumulated cursor
+    /// motion, in physical pixels, still treated as a shaping *click*. A
+    /// press→release that moves further is a camera *drag* (orbit/pan) and
+    /// issues no command; `0` makes any motion a drag.
+    pub click_drag_threshold_px: f32,
+}
+
+/// `input.shape.{raise,lower}_button` — a bindable pointer button. Named modes,
+/// not raw platform codes, so a binding is stable across windowing backends and
+/// authored as a readable string (`"left"`) in config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerButton {
+    /// The left mouse button.
+    Left,
+    /// The right mouse button.
+    Right,
+    /// The middle mouse button (wheel click).
+    Middle,
+}

@@ -92,6 +92,74 @@
         "terrain"
       ]
     },
+    "input": {
+      "description": "`input.*` — input mapping & sensitivities (ADR 0022; issue #9 Phase 2).\nProjected into a standalone [`InputParams`], like `render.*` and for the\nsame reason: input bindings are presentation/UX, outside the determinism\nboundary (docs/40-parameterisation.md §2.2).",
+      "type": "object",
+      "properties": {
+        "shape": {
+          "description": "`input.shape.*` — the terrain-shaping controls.",
+          "type": "object",
+          "properties": {
+            "click_drag_threshold_px": {
+              "description": "`input.shape.click_drag_threshold_px` — max cursor motion (physical\npixels) still counted as a shaping click. Non-negative; 0 makes any\nmotion a drag.",
+              "type": "number",
+              "format": "float",
+              "minimum": 0.0
+            },
+            "lower_button": {
+              "description": "`input.shape.lower_button` — the pointer button that lowers it.",
+              "oneOf": [
+                {
+                  "description": "The left mouse button.",
+                  "type": "string",
+                  "const": "left"
+                },
+                {
+                  "description": "The right mouse button.",
+                  "type": "string",
+                  "const": "right"
+                },
+                {
+                  "description": "The middle mouse button (wheel click).",
+                  "type": "string",
+                  "const": "middle"
+                }
+              ]
+            },
+            "raise_button": {
+              "description": "`input.shape.raise_button` — the pointer button that raises the picked\nvertex.",
+              "oneOf": [
+                {
+                  "description": "The left mouse button.",
+                  "type": "string",
+                  "const": "left"
+                },
+                {
+                  "description": "The right mouse button.",
+                  "type": "string",
+                  "const": "right"
+                },
+                {
+                  "description": "The middle mouse button (wheel click).",
+                  "type": "string",
+                  "const": "middle"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "raise_button",
+            "lower_button",
+            "click_drag_threshold_px"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "shape"
+      ]
+    },
     "meta": {
       "description": "`meta.*` — config/schema versioning and provenance.",
       "type": "object",
@@ -613,6 +681,7 @@
     "meta",
     "sim",
     "content",
-    "render"
+    "render",
+    "input"
   ]
 }

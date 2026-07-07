@@ -6,13 +6,20 @@
 //!   plus a textual terrain demo (issue #6 §5) and the interactive command seam
 //!   (ADR 0022): a [`WorkbenchSession`] sculpts the generated world through the
 //!   [`SimDriver`] port and prints a before/after census.
-//! - `workbench` — open the on-screen 3D terrain workbench (issue #8, ADR 0020):
-//!   a lit height field the Director can orbit / pan / zoom. Needs a display.
+//! - `workbench` — open the on-screen 3D terrain workbench (issue #8, ADR 0020;
+//!   ADR 0022): a lit height field the Director can orbit / pan / zoom **and
+//!   shape** — left-click raises the picked vertex, right-click lowers it, and a
+//!   drag still moves the camera. Needs a display.
 //! - `capture [PATH [YAW PITCH DISTANCE]]` — render the same scene headlessly to
 //!   a PNG (ADR 0020 §2), the agents-only visual self-check used by `/verify`.
 //!   The optional orbit (yaw/pitch degrees, distance) drives the Phase-2 camera
 //!   for the multi-angle self-check; omitted, it uses the configured pose. No
 //!   display required.
+//! - `capture-shape [BEFORE AFTER]` — the display-free proof of the interactive
+//!   shaping seam (ADR 0022): submit a scripted `TerrainCommand` through the
+//!   same `SimDriver` submit + snapshot-pull path the event loop uses and
+//!   capture before/after PNGs, so the land is *observed* to change without a
+//!   display. No display required.
 //!
 //! The composition root is the only crate permitted to name concrete adapters
 //! (docs/20-architecture.md §5.2): it projects `render.*` into `RenderParams`,
@@ -24,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use providence_app::WorkbenchSession;
-use providence_config::{Params, RenderParams, TerrainParams};
+use providence_config::{InputParams, Params, RenderParams, TerrainParams};
 use providence_core::terrain::{
     Feature, FeatureMap, HeightField, TerrainType, classify_vertex, generate, place_features, raise,
 };
@@ -55,10 +62,11 @@ fn main() -> ExitCode {
         None => smoke_run(),
         Some("workbench") => run_workbench(),
         Some("capture") => run_capture(&args[1..]),
+        Some("capture-shape") => run_capture_shape(&args[1..]),
         Some(other) => {
             eprintln!(
-                "providence: unknown subcommand `{other}` \
-                 (try: workbench | capture [PATH [YAW PITCH DISTANCE]])"
+                "providence: unknown subcommand `{other}` (try: \
+                 workbench | capture [PATH [YAW PITCH DISTANCE]] | capture-shape [BEFORE AFTER])"
             );
             ExitCode::FAILURE
         }
@@ -239,25 +247,49 @@ fn flat_sea_patch(heights: &[i32], width: u32, height: u32, sea_level: i32) -> O
     None
 }
 
-/// Open the on-screen 3D workbench (issue #8 Phase 1). Builds the workbench
-/// field, presents it through the windowed [`WindowRenderer`], and runs the
-/// event loop until the window closes.
+/// Open the on-screen 3D workbench (issue #8 Phase 1; interactive shaping,
+/// ADR 0022). Builds the interactive [`WorkbenchSession`] (the `SimDriver` the
+/// renderer shapes through), seeds the initial frame from its snapshot, and runs
+/// the event loop — clicks submit commands, drags move the camera — until the
+/// window closes.
 fn run_workbench() -> ExitCode {
-    let (params, render) = match (load_params(), load_render()) {
-        (Ok(params), Ok(render)) => (params, render),
-        (Err(code), _) | (_, Err(code)) => return code,
+    let params = match load_params() {
+        Ok(params) => params,
+        Err(code) => return code,
+    };
+    let render = match load_render() {
+        Ok(render) => render,
+        Err(code) => return code,
+    };
+    let input = match load_input() {
+        Ok(input) => input,
+        Err(code) => return code,
     };
 
+    // Census from a freshly generated world: the immovables census needs the
+    // FeatureMap, which the session does not expose. The session regenerates the
+    // identical field internally (worldgen is a pure function of the seed).
     let field = generate_world(&params);
     let features = place_features(&field, &params.sim.worldgen, &params.content.terrain);
     print_terrain_census(&field, &features, &params);
-    let heights = frame_heights(&field);
-    let frame = TerrainFrame::new(field.width(), field.height(), &heights);
 
-    println!("providence: opening the terrain workbench — close the window to exit.");
+    // The interactive session is the SimDriver the renderer submits commands to
+    // and pulls fresh snapshots from (ADR 0022 §4).
+    let mut session = WorkbenchSession::new(&params);
+
     let mut renderer = WindowRenderer::new(render);
-    renderer.present(frame);
-    match renderer.run() {
+    // Seed the initial frame from the session snapshot; `present` is unchanged
+    // (ADR 0022 §4). The borrow ends before the session is handed to `run`.
+    {
+        let frame = TerrainFrame::new(session.width(), session.height(), session.heights());
+        renderer.present(frame);
+    }
+    println!(
+        "providence: opening the interactive terrain workbench — click to shape \
+         (left raises, right lowers, by default), drag to orbit/pan/zoom. \
+         Close the window to exit."
+    );
+    match renderer.run(&mut session, input) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("providence: workbench error: {error}");
@@ -322,6 +354,111 @@ fn run_capture(args: &[String]) -> ExitCode {
     }
 }
 
+/// Default before/after PNG paths for a `capture-shape` with no explicit paths.
+const DEFAULT_SHAPE_BEFORE: &str = "target/workbench-before.png";
+const DEFAULT_SHAPE_AFTER: &str = "target/workbench-after.png";
+/// How many raises the headless shaping proof applies — enough to grow a clearly
+/// visible stepped cone out of the sea (dev tooling, not gameplay).
+const SHAPE_PROOF_RAISES: u32 = 3;
+
+/// The display-free proof of the interactive pick→command→redraw path
+/// (ADR 0022; the Definition-of-Done observation, contract §3). Builds a
+/// [`WorkbenchSession`], captures a before PNG, submits a scripted sculpt through
+/// the **same** [`SimDriver`] submit + snapshot-pull path the window event loop
+/// uses, then captures an after PNG — so the land is *observed* to change
+/// without a display. The cursor→vertex pick half of the path is unit-tested in
+/// the renderer gate (`pick`/`input`); this proves the command→submit→redraw
+/// half end-to-end.
+fn run_capture_shape(args: &[String]) -> ExitCode {
+    let (before_path, after_path) = match args {
+        [] => (
+            PathBuf::from(DEFAULT_SHAPE_BEFORE),
+            PathBuf::from(DEFAULT_SHAPE_AFTER),
+        ),
+        [before, after] => (PathBuf::from(before), PathBuf::from(after)),
+        _ => {
+            eprintln!("providence: usage: capture-shape [BEFORE_PNG AFTER_PNG]");
+            return ExitCode::FAILURE;
+        }
+    };
+    let params = match load_params() {
+        Ok(params) => params,
+        Err(code) => return code,
+    };
+    let render = match load_render() {
+        Ok(render) => render,
+        Err(code) => return code,
+    };
+
+    // The interactive session — the SimDriver the window would shape through.
+    let mut session = WorkbenchSession::new(&params);
+    let (width, height) = (session.width(), session.height());
+    println!(
+        "providence: headless shaping proof (ADR 0022) on a {width}×{height} generated world:"
+    );
+    println!(
+        "  before: {}",
+        census_line(session.heights(), width, height, &params)
+    );
+    if let Err(code) = capture_snapshot(&session, &render, &before_path) {
+        return code;
+    }
+
+    // Find a guaranteed-shapeable vertex — a flat sea patch carries no immovables
+    // (ADR 0017 §5), so a raise there always moves the land, never refused.
+    let Some((sx, sy)) = flat_sea_patch(
+        session.heights(),
+        width,
+        height,
+        params.sim.worldgen.sea_level,
+    ) else {
+        eprintln!("providence: no open-sea patch to sculpt — cannot run the shaping proof");
+        return ExitCode::FAILURE;
+    };
+
+    // Submit the scripted sculpt through the SimDriver — the exact submit +
+    // snapshot-pull path the event loop's shaping click drives (ADR 0022 §3).
+    let before_revision = session.revision();
+    for _ in 0..SHAPE_PROOF_RAISES {
+        session.submit(TerrainCommand::Raise { x: sx, y: sy });
+    }
+    println!(
+        "  after:  {}",
+        census_line(session.heights(), width, height, &params)
+    );
+    if let Err(code) = capture_snapshot(&session, &render, &after_path) {
+        return code;
+    }
+
+    println!(
+        "  sculpted vertex ({sx}, {sy}); {n} raises → revision {before_revision}→{after_revision}, \
+         {logged} commands logged; before {before}, after {after} \
+         (the land changed — a session is seed + params + log, replayable bit-for-bit)",
+        n = SHAPE_PROOF_RAISES,
+        after_revision = session.revision(),
+        logged = session.log().len(),
+        before = before_path.display(),
+        after = after_path.display(),
+    );
+    ExitCode::SUCCESS
+}
+
+/// Capture the session's current snapshot to a PNG through the headless renderer
+/// — the same `present` → build-mesh path the window uses each redraw (ADR 0022).
+fn capture_snapshot(
+    session: &WorkbenchSession,
+    render: &RenderParams,
+    path: &Path,
+) -> Result<(), ExitCode> {
+    let frame = TerrainFrame::new(session.width(), session.height(), session.heights());
+    let mut renderer = HeadlessRenderer::new(render.clone());
+    renderer.present(frame);
+    renderer.capture(path).map_err(|error| {
+        eprintln!("providence: capture error: {error}");
+        ExitCode::FAILURE
+    })
+}
+
 /// Load and validate the core params from `config/`, mapping a failure to a
 /// printed error and a failure exit code.
 fn load_params() -> Result<Params, ExitCode> {
@@ -335,6 +472,15 @@ fn load_params() -> Result<Params, ExitCode> {
 fn load_render() -> Result<RenderParams, ExitCode> {
     providence_config_loader::load_render(Path::new("config")).map_err(|error| {
         eprintln!("providence: render config error: {error}");
+        ExitCode::FAILURE
+    })
+}
+
+/// Load and validate the input params (`input.*`) from `config/` (ADR 0022) —
+/// the interactive workbench's shaping bindings.
+fn load_input() -> Result<InputParams, ExitCode> {
+    providence_config_loader::load_input(Path::new("config")).map_err(|error| {
+        eprintln!("providence: input config error: {error}");
         ExitCode::FAILURE
     })
 }

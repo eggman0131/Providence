@@ -190,6 +190,31 @@ impl TerrainScene {
         self.camera = camera;
     }
 
+    /// Replace the drawn geometry with a freshly built [`Mesh`] (issue #9
+    /// Phase 2). After a shaping command mutates the height field, the renderer
+    /// rebuilds the mesh from the new snapshot and re-uploads it here; the next
+    /// [`draw`](Self::draw) shows the changed land. The grid dimensions never
+    /// change under shaping, so this is a same-size vertex-buffer swap. Called
+    /// only on a shaping click — user-paced, not per-frame — so recreating the
+    /// buffer is cheap enough.
+    pub fn set_mesh(&mut self, device: &wgpu::Device, mesh: &Mesh) {
+        let vertices: Vec<GpuVertex> = mesh
+            .vertices
+            .iter()
+            .map(|v| GpuVertex {
+                position: v.position,
+                normal: v.normal,
+                color: v.color,
+            })
+            .collect();
+        self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("terrain-vertices"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    }
+
     /// Recompute and upload the uniforms for a viewport of the given pixel
     /// size. Called on resize and before each draw so the projection tracks the
     /// surface's aspect ratio (and, in Phase 2, the live camera).

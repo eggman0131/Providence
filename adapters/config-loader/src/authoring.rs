@@ -8,10 +8,11 @@
 
 use garde::Validate;
 use providence_config::{
-    BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams, LightingParams,
-    ManaMode, ManaParams, MeshParams, MountainContent, OpponentParams, PaletteParams, Params,
-    PlaceholderParams, RaiseParams, RenderParams, RockContent, Shape, ShoreContent, SimParams,
-    TerrainContent, TerrainParams, TreeContent, WinLossParams, WindowParams, WorldgenParams,
+    BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams, InputParams,
+    LightingParams, ManaMode, ManaParams, MeshParams, MountainContent, OpponentParams,
+    PaletteParams, Params, PlaceholderParams, PointerButton, RaiseParams, RenderParams,
+    RockContent, Shape, ShapeInputParams, ShoreContent, SimParams, TerrainContent, TerrainParams,
+    TreeContent, WinLossParams, WindowParams, WorldgenParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -36,6 +37,12 @@ pub struct ConfigRoot {
     /// determinism boundary (docs/40-parameterisation.md §2.2).
     #[garde(dive)]
     pub render: RenderSection,
+    /// `input.*` — input mapping & sensitivities (ADR 0022; issue #9 Phase 2).
+    /// Projected into a standalone [`InputParams`], like `render.*` and for the
+    /// same reason: input bindings are presentation/UX, outside the determinism
+    /// boundary (docs/40-parameterisation.md §2.2).
+    #[garde(dive)]
+    pub input: InputSection,
 }
 
 /// `meta.*` (docs/40-parameterisation.md §2.2).
@@ -457,6 +464,50 @@ pub struct HudSection {
     pub show_reticle: bool,
 }
 
+/// `input.*` (docs/40-parameterisation.md §2.2) — input mapping for the
+/// interactive workbench. Outside the determinism boundary; projected into
+/// [`InputParams`] via [`ConfigRoot::into_input_params`], never into the
+/// core-injected [`Params`] (ADR 0022).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct InputSection {
+    /// `input.shape.*` — the terrain-shaping controls.
+    #[garde(dive)]
+    pub shape: ShapeSection,
+}
+
+/// `input.shape.*` — which button raises, which lowers, and the click-vs-drag
+/// motion threshold (ADR 0022, the Director's control-scheme ruling).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeSection {
+    /// `input.shape.raise_button` — the pointer button that raises the picked
+    /// vertex.
+    #[garde(skip)]
+    pub raise_button: PointerButtonAuthored,
+    /// `input.shape.lower_button` — the pointer button that lowers it.
+    #[garde(skip)]
+    pub lower_button: PointerButtonAuthored,
+    /// `input.shape.click_drag_threshold_px` — max cursor motion (physical
+    /// pixels) still counted as a shaping click. Non-negative; 0 makes any
+    /// motion a drag.
+    #[garde(range(min = 0.0))]
+    pub click_drag_threshold_px: f32,
+}
+
+/// `input.shape.{raise,lower}_button` values, authored as `snake_case` strings
+/// in TOML (`raise_button = "left"`). Maps to the core [`PointerButton`].
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerButtonAuthored {
+    /// The left mouse button.
+    Left,
+    /// The right mouse button.
+    Right,
+    /// The middle mouse button (wheel click).
+    Middle,
+}
+
 impl ConfigRoot {
     /// Map the validated authoring config into the immutable `no_std`
     /// params the core consumes. Purely mechanical; covered by tests.
@@ -565,6 +616,21 @@ impl ConfigRoot {
             },
         }
     }
+
+    /// Project the validated `input.*` config into the standalone
+    /// [`InputParams`] the renderer adapter consumes (ADR 0022). Separate from
+    /// [`into_params`](Self::into_params) so input bindings never travel with
+    /// the core's [`Params`]. Purely mechanical; covered by tests.
+    #[must_use]
+    pub fn into_input_params(self) -> InputParams {
+        InputParams {
+            shape: ShapeInputParams {
+                raise_button: self.input.shape.raise_button.into_param(),
+                lower_button: self.input.shape.lower_button.into_param(),
+                click_drag_threshold_px: self.input.shape.click_drag_threshold_px,
+            },
+        }
+    }
 }
 
 impl ManaModeAuthored {
@@ -588,6 +654,18 @@ impl ShapeAuthored {
             ShapeAuthored::Continent => Shape::Continent,
             ShapeAuthored::Archipelago => Shape::Archipelago,
             ShapeAuthored::Inland => Shape::Inland,
+        }
+    }
+}
+
+impl PointerButtonAuthored {
+    /// Map the authored TOML value to the core [`PointerButton`]. Purely
+    /// mechanical; covered by the loader tests.
+    fn into_param(self) -> PointerButton {
+        match self {
+            PointerButtonAuthored::Left => PointerButton::Left,
+            PointerButtonAuthored::Right => PointerButton::Right,
+            PointerButtonAuthored::Middle => PointerButton::Middle,
         }
     }
 }
