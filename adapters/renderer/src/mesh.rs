@@ -11,10 +11,10 @@
 //! caller-supplied parameter here, not a constant: the renderer sources it from
 //! the `render.mesh.vertical_scale` key (ADR 0020 §4).
 
-use providence_config::PaletteParams;
-use providence_ports::TerrainFrame;
+use providence_config::MaterialParams;
+use providence_ports::{TerrainFrame, TerrainType};
 
-use crate::color::height_color;
+use crate::color::material_color;
 use crate::math::{cross, normalize, sub};
 
 /// A world-space position, `[x, y, z]`, with y up.
@@ -30,7 +30,8 @@ pub struct Vertex {
     pub position: Position,
     /// The flat normal of the face this vertex belongs to (unit, oriented up).
     pub normal: [f32; 3],
-    /// Linear-RGB colour from the vertex's height (see [`height_color`]).
+    /// Linear-RGB colour from the vertex's terrain type and height (see
+    /// [`material_color`]).
     pub color: [f32; 3],
 }
 
@@ -61,13 +62,20 @@ impl Mesh {
 /// Every 1×1 grid cell whose four corners are present becomes two triangles;
 /// each triangle gets a single face normal (oriented upward so lighting reads
 /// the top of the land regardless of winding) shared by its three unshared
-/// vertices. Vertices are coloured by their own height across the frame's drawn
-/// `[min, max]` range, so the height gradient shows through the facets. A frame
-/// with fewer than two rows or columns yields an empty mesh (nothing to face).
+/// vertices. Vertices are coloured by their derived terrain **type** from the
+/// `material` table (ADR 0023) — sand/grass/rock, mountains ramping to snow
+/// across the frame's drawn mountain-height range — so the material bands trace
+/// the terrain-type (and thus the step) boundaries. A frame built to draw
+/// carries a full `types` slice; a well-formed frame skips no cell. A frame with
+/// fewer than two rows or columns yields an empty mesh (nothing to face).
 #[must_use]
-pub fn build_mesh(frame: &TerrainFrame<'_>, vertical_scale: f32, palette: &PaletteParams) -> Mesh {
+pub fn build_mesh(
+    frame: &TerrainFrame<'_>,
+    vertical_scale: f32,
+    material: &MaterialParams,
+) -> Mesh {
     let (width, depth) = (frame.width(), frame.height());
-    let (min_height, max_height) = height_bounds(frame);
+    let (mountain_lo, mountain_hi) = mountain_bounds(frame);
     let mut vertices = Vec::new();
 
     for y in 0..depth.saturating_sub(1) {
@@ -80,24 +88,24 @@ pub fn build_mesh(frame: &TerrainFrame<'_>, vertical_scale: f32, palette: &Palet
             ) else {
                 continue; // a well-formed frame skips no cell
             };
-            let c00 = Corner::new(x, y, h00, width, depth, vertical_scale);
-            let c10 = Corner::new(x + 1, y, h10, width, depth, vertical_scale);
-            let c01 = Corner::new(x, y + 1, h01, width, depth, vertical_scale);
-            let c11 = Corner::new(x + 1, y + 1, h11, width, depth, vertical_scale);
+            let c00 = Corner::new(x, y, h00, frame, vertical_scale);
+            let c10 = Corner::new(x + 1, y, h10, frame, vertical_scale);
+            let c01 = Corner::new(x, y + 1, h01, frame, vertical_scale);
+            let c11 = Corner::new(x + 1, y + 1, h11, frame, vertical_scale);
 
             push_triangle(
                 &mut vertices,
                 [c00, c10, c11],
-                min_height,
-                max_height,
-                palette,
+                mountain_lo,
+                mountain_hi,
+                material,
             );
             push_triangle(
                 &mut vertices,
                 [c00, c11, c01],
-                min_height,
-                max_height,
-                palette,
+                mountain_lo,
+                mountain_hi,
+                material,
             );
         }
     }
@@ -105,31 +113,36 @@ pub fn build_mesh(frame: &TerrainFrame<'_>, vertical_scale: f32, palette: &Palet
     Mesh { vertices }
 }
 
-/// A cell corner during meshing: its world position and the integer height it
-/// carries (kept so the vertex can be coloured by its own height).
+/// A cell corner during meshing: its world position, the integer height it
+/// carries, and its derived terrain type — kept so the vertex can be coloured by
+/// the material table. A vertex whose type is absent (only a heights-only frame,
+/// never drawn) falls back to [`TerrainType::Land`].
 #[derive(Clone, Copy)]
 struct Corner {
     position: Position,
     height: i32,
+    kind: TerrainType,
 }
 
 impl Corner {
-    fn new(x: u32, y: u32, height: i32, width: u32, depth: u32, vertical_scale: f32) -> Self {
+    fn new(x: u32, y: u32, height: i32, frame: &TerrainFrame<'_>, vertical_scale: f32) -> Self {
         Self {
-            position: vertex_position(x, y, height, width, depth, vertical_scale),
+            position: vertex_position(x, y, height, frame.width(), frame.height(), vertical_scale),
             height,
+            kind: frame.type_at(x, y).unwrap_or(TerrainType::Land),
         }
     }
 }
 
 /// Emit one triangle: compute its flat face normal (oriented so it points up),
-/// then push its three vertices, each coloured by its own height.
+/// then push its three vertices, each coloured by its terrain type (mountains
+/// ramping across the frame's drawn mountain-height range `[lo, hi]`).
 fn push_triangle(
     out: &mut Vec<Vertex>,
     corners: [Corner; 3],
-    min_height: i32,
-    max_height: i32,
-    palette: &PaletteParams,
+    mountain_lo: i32,
+    mountain_hi: i32,
+    material: &MaterialParams,
 ) {
     let normal = face_normal(
         corners[0].position,
@@ -140,7 +153,13 @@ fn push_triangle(
         out.push(Vertex {
             position: corner.position,
             normal,
-            color: height_color(corner.height, min_height, max_height, palette),
+            color: material_color(
+                corner.kind,
+                corner.height,
+                mountain_lo,
+                mountain_hi,
+                material,
+            ),
         });
     }
 }
@@ -157,15 +176,25 @@ fn face_normal(a: Position, b: Position, c: Position) -> [f32; 3] {
     }
 }
 
-/// The lowest and highest heights present in `frame`, used to normalise the
-/// height→colour ramp. An empty frame collapses to `(0, 0)`.
-fn height_bounds(frame: &TerrainFrame<'_>) -> (i32, i32) {
+/// The lowest and highest heights among the frame's **mountain** vertices — the
+/// drawn range the rock→snow ramp normalises over (ADR 0023). A frame with no
+/// mountains collapses to `(0, 0)`; since only mountain vertices consult this
+/// range, that fallback is never actually sampled.
+fn mountain_bounds(frame: &TerrainFrame<'_>) -> (i32, i32) {
+    let (width, depth) = (frame.width(), frame.height());
     let mut bounds: Option<(i32, i32)> = None;
-    for &height in frame.heights() {
-        bounds = Some(match bounds {
-            Some((lo, hi)) => (lo.min(height), hi.max(height)),
-            None => (height, height),
-        });
+    for y in 0..depth {
+        for x in 0..width {
+            if frame.type_at(x, y) != Some(TerrainType::Mountain) {
+                continue;
+            }
+            if let Some(height) = frame.get(x, y) {
+                bounds = Some(match bounds {
+                    Some((lo, hi)) => (lo.min(height), hi.max(height)),
+                    None => (height, height),
+                });
+            }
+        }
     }
     bounds.unwrap_or((0, 0))
 }
@@ -216,14 +245,25 @@ pub fn vertex_positions(frame: &TerrainFrame<'_>, vertical_scale: f32) -> Vec<Po
 
 #[cfg(test)]
 mod tests {
-    use super::{build_mesh, center_offset, height_bounds, vertex_position, vertex_positions};
-    use providence_config::PaletteParams;
-    use providence_ports::TerrainFrame;
+    use super::{build_mesh, center_offset, mountain_bounds, vertex_position, vertex_positions};
+    use providence_config::MaterialParams;
+    use providence_ports::{TerrainFrame, TerrainType};
 
-    const PALETTE: PaletteParams = PaletteParams {
-        low_rgb: [0.0, 0.0, 0.0],
-        high_rgb: [1.0, 1.0, 1.0],
+    /// A material table with a distinct base colour per type so a returned
+    /// colour names the band; the mountain ramp runs rock (black) → snow (white).
+    const MATERIAL: MaterialParams = MaterialParams {
+        water_rgb: [0.0, 0.0, 1.0],
+        shore_rgb: [1.0, 1.0, 0.0],
+        land_rgb: [0.0, 1.0, 0.0],
+        mountain_rgb: [0.0, 0.0, 0.0],
+        peak_rgb: [1.0, 1.0, 1.0],
     };
+
+    /// `n` copies of [`TerrainType::Land`] — the terrain types for a
+    /// geometry-only test whose colours are not under test.
+    fn land(n: usize) -> Vec<TerrainType> {
+        vec![TerrainType::Land; n]
+    }
 
     /// Floats compared within a tolerance (clippy forbids `==` on floats).
     fn approx(a: f32, b: f32) -> bool {
@@ -254,7 +294,7 @@ mod tests {
     #[test]
     fn positions_cover_every_vertex_row_major() {
         let heights = [0, 1, 1, 2]; // 2×2
-        let frame = TerrainFrame::new(2, 2, &heights);
+        let frame = TerrainFrame::new(2, 2, &heights, &[]);
         let positions = vertex_positions(&frame, 1.0);
         assert_eq!(positions.len(), 4);
         assert!(approx(positions[0][1], 0.0), "(0,0) height 0 → y 0");
@@ -265,8 +305,9 @@ mod tests {
     fn a_grid_meshes_into_two_triangles_per_cell() {
         // 3×3 vertices → 2×2 cells → 4 cells × 2 triangles × 3 vertices = 24.
         let heights = [0; 9];
-        let frame = TerrainFrame::new(3, 3, &heights);
-        let mesh = build_mesh(&frame, 1.0, &PALETTE);
+        let types = land(9);
+        let frame = TerrainFrame::new(3, 3, &heights, &types);
+        let mesh = build_mesh(&frame, 1.0, &MATERIAL);
         assert_eq!(mesh.triangle_count(), 8);
         assert_eq!(mesh.vertices.len(), 24);
         assert!(!mesh.is_empty());
@@ -275,15 +316,17 @@ mod tests {
     #[test]
     fn a_frame_too_small_for_a_cell_yields_no_geometry() {
         let heights = [3, 4];
-        let frame = TerrainFrame::new(2, 1, &heights); // one row: no complete cell
-        assert!(build_mesh(&frame, 1.0, &PALETTE).is_empty());
+        let types = land(2);
+        let frame = TerrainFrame::new(2, 1, &heights, &types); // one row: no cell
+        assert!(build_mesh(&frame, 1.0, &MATERIAL).is_empty());
     }
 
     #[test]
     fn a_flat_field_has_upward_unit_normals() {
         let heights = [5; 4]; // 2×2, all equal → the surface is level
-        let frame = TerrainFrame::new(2, 2, &heights);
-        let mesh = build_mesh(&frame, 1.0, &PALETTE);
+        let types = land(4);
+        let frame = TerrainFrame::new(2, 2, &heights, &types);
+        let mesh = build_mesh(&frame, 1.0, &MATERIAL);
         for vertex in &mesh.vertices {
             assert!(
                 approx3(vertex.normal, [0.0, 1.0, 0.0]),
@@ -297,8 +340,9 @@ mod tests {
         // A tilted surface: normals must still point up (positive y) and be
         // unit length, so lighting reads the top face whatever the winding.
         let heights = [0, 1, 1, 2];
-        let frame = TerrainFrame::new(2, 2, &heights);
-        let mesh = build_mesh(&frame, 1.0, &PALETTE);
+        let types = land(4);
+        let frame = TerrainFrame::new(2, 2, &heights, &types);
+        let mesh = build_mesh(&frame, 1.0, &MATERIAL);
         for vertex in &mesh.vertices {
             let [nx, ny, nz] = vertex.normal;
             assert!(ny > 0.0, "normal points up");
@@ -307,31 +351,54 @@ mod tests {
     }
 
     #[test]
-    fn vertices_are_coloured_across_the_height_range() {
-        // Lowest vertex → low palette anchor, highest → high anchor.
-        let heights = [0, 0, 0, 10];
-        let frame = TerrainFrame::new(2, 2, &heights);
-        let mesh = build_mesh(&frame, 1.0, &PALETTE);
+    fn vertices_are_coloured_by_their_terrain_type() {
+        // A 2×2 cell with one vertex of each type: every band's base colour
+        // appears in the mesh, keyed on the derived type (ADR 0023), not height.
+        let heights = [0, 1, 4, 12];
+        let types = [
+            TerrainType::Water,
+            TerrainType::Shore,
+            TerrainType::Land,
+            TerrainType::Mountain,
+        ];
+        let frame = TerrainFrame::new(2, 2, &heights, &types);
+        let mesh = build_mesh(&frame, 1.0, &MATERIAL);
+        let has = |c: [f32; 3]| mesh.vertices.iter().any(|v| approx3(v.color, c));
         assert!(
-            mesh.vertices
-                .iter()
-                .any(|v| approx3(v.color, [0.0, 0.0, 0.0])),
-            "the height-0 vertices take the low anchor"
+            has([0.0, 0.0, 1.0]),
+            "the water vertex is the seabed colour"
         );
-        assert!(
-            mesh.vertices
-                .iter()
-                .any(|v| approx3(v.color, [1.0, 1.0, 1.0])),
-            "the height-10 vertex takes the high anchor"
-        );
+        assert!(has([1.0, 1.0, 0.0]), "the shore vertex is sand");
+        assert!(has([0.0, 1.0, 0.0]), "the land vertex is grass");
+        // The sole mountain is both lo and hi of its band, so it takes the rock
+        // anchor (a degenerate ramp).
+        assert!(has([0.0, 0.0, 0.0]), "the mountain vertex is rock");
     }
 
     #[test]
-    fn height_bounds_span_the_frame() {
+    fn mountain_bounds_span_only_the_mountain_vertices() {
+        // Heights vary, but only two vertices are mountains (at 8 and 14); the
+        // ramp must normalise over those, ignoring the lower non-mountain land.
+        let heights = [2, 8, 5, 14];
+        let types = [
+            TerrainType::Land,
+            TerrainType::Mountain,
+            TerrainType::Land,
+            TerrainType::Mountain,
+        ];
+        let frame = TerrainFrame::new(2, 2, &heights, &types);
+        assert_eq!(mountain_bounds(&frame), (8, 14));
+    }
+
+    #[test]
+    fn mountain_bounds_of_a_mountainless_frame_collapse() {
         let heights = [-2, 0, 5, 3];
-        let frame = TerrainFrame::new(2, 2, &heights);
-        assert_eq!(height_bounds(&frame), (-2, 5));
-        let empty = TerrainFrame::new(0, 0, &[]);
-        assert_eq!(height_bounds(&empty), (0, 0), "an empty frame collapses");
+        let types = land(4);
+        let frame = TerrainFrame::new(2, 2, &heights, &types);
+        assert_eq!(
+            mountain_bounds(&frame),
+            (0, 0),
+            "no mountains → an unsampled (0, 0)"
+        );
     }
 }

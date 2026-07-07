@@ -283,8 +283,9 @@ pub struct RenderParams {
     pub camera: CameraParams,
     /// `render.lighting.*` — the directional light shading the surface.
     pub lighting: LightingParams,
-    /// `render.palette.*` — how vertex height maps to colour.
-    pub palette: PaletteParams,
+    /// `render.material.*` — how a vertex's terrain type (and, within mountains,
+    /// its height) maps to colour (ADR 0023).
+    pub material: MaterialParams,
     /// `render.background.*` — the surface the world is drawn against.
     pub background: BackgroundParams,
     /// `render.mesh.*` — how the height field becomes a drawable surface.
@@ -354,14 +355,34 @@ pub struct LightingParams {
     pub diffuse: f32,
 }
 
-/// `render.palette.*` — vertex height → colour, lerped from `low_rgb` at the
-/// lowest drawn height to `high_rgb` at the highest.
+/// `render.material.*` — the terrain-type material table (ADR 0023; issue #22
+/// Phase 1): the base colour of each terrain type, plus the snow colour the
+/// mountain band ramps toward at its highest vertices.
+///
+/// Aligned to the simulation's own terrain types (the Director's ruling: terrain
+/// type is the shared carrier for the *look* and for future gameplay), so what
+/// the land *is* drives what it looks like. Shore→sand, land→grass,
+/// mountain→rock ramping to snow (`peak_rgb`) near the top; water vertices take
+/// `water_rgb` (the seabed, until Phase 2 floats a real water surface over it).
+/// All linear RGB. Subsumes the former 2-stop `render.palette.*`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PaletteParams {
-    /// `render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.
-    pub low_rgb: [f32; 3],
-    /// `render.palette.high_rgb` — colour at the highest drawn height, linear RGB.
-    pub high_rgb: [f32; 3],
+#[allow(
+    clippy::struct_field_names,
+    reason = "each field is a distinct colour; the `_rgb` suffix names the linear-RGB unit, matching the `low_rgb`/`background.rgb` convention across render config"
+)]
+pub struct MaterialParams {
+    /// `render.material.water_rgb` — underwater seabed colour, linear RGB.
+    pub water_rgb: [f32; 3],
+    /// `render.material.shore_rgb` — the sandy coastal band, linear RGB.
+    pub shore_rgb: [f32; 3],
+    /// `render.material.land_rgb` — ordinary grassy lowland, linear RGB.
+    pub land_rgb: [f32; 3],
+    /// `render.material.mountain_rgb` — bare rock at the mountain band's base,
+    /// linear RGB.
+    pub mountain_rgb: [f32; 3],
+    /// `render.material.peak_rgb` — snow the mountain band ramps toward at its
+    /// highest vertices, linear RGB.
+    pub peak_rgb: [f32; 3],
 }
 
 /// `render.background.*` — the clear colour the world is drawn against.

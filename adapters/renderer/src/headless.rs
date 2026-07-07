@@ -217,7 +217,7 @@ impl RendererPort for HeadlessRenderer {
         self.mesh = Some(build_mesh(
             &frame,
             self.params.mesh.vertical_scale,
-            &self.params.palette,
+            &self.params.material,
         ));
         #[cfg(feature = "debug-hud")]
         {

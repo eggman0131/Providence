@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use providence_config::{InputParams, PaletteParams, PointerButton, RenderParams};
+use providence_config::{InputParams, MaterialParams, PointerButton, RenderParams};
 use providence_ports::{RendererPort, SimDriver, TerrainFrame};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -108,7 +108,7 @@ impl RendererPort for WindowRenderer {
         self.mesh = build_mesh(
             &frame,
             self.params.mesh.vertical_scale,
-            &self.params.palette,
+            &self.params.material,
         );
         // The grid is now kept unconditionally: a shaping click picks against it
         // (issue #9 Phase 2), not only the debug HUD (issue #8 Phase 3).
@@ -257,9 +257,10 @@ struct WindowState {
     animation_ripple_ms_per_unit: f32,
     /// The shaping controls (`input.shape.*`): bindings + click-vs-drag slack.
     input: InputParams,
-    /// The palette, so a shaping command can rebuild the mesh from the fresh
-    /// snapshot with the same colouring (issue #9 Phase 2).
-    palette: PaletteParams,
+    /// The material table, so a shaping command can rebuild the mesh from the
+    /// fresh snapshot with the same terrain-type colouring (issue #9 Phase 2,
+    /// ADR 0023).
+    material: MaterialParams,
     /// The presented grid: a click picks the vertex under the cursor from it
     /// (issue #9 Phase 2), and the HUD picks the reticle vertex (issue #8
     /// Phase 3). Refreshed from the driver after every shaping command.
@@ -334,7 +335,7 @@ impl WindowState {
             animation_duration_ms: params.animation.duration_ms,
             animation_ripple_ms_per_unit: params.animation.ripple_ms_per_unit,
             input: input.clone(),
-            palette: params.palette.clone(),
+            material: params.material.clone(),
             grid: GridSnapshot::default(),
             vertical_scale: params.mesh.vertical_scale,
             #[cfg(feature = "debug-hud")]
@@ -425,8 +426,9 @@ impl WindowState {
         // from the shaped vertex.
         let (width, height) = (driver.width(), driver.height());
         let heights = driver.heights().to_vec();
-        let frame = TerrainFrame::new(width, height, &heights);
-        let target = build_mesh(&frame, self.vertical_scale, &self.palette);
+        let types = driver.types().to_vec();
+        let frame = TerrainFrame::new(width, height, &heights, &types);
+        let target = build_mesh(&frame, self.vertical_scale, &self.material);
         self.grid = GridSnapshot::from_frame(&frame);
         // The shaped vertex's world (x, z) is the ripple centre (the ripple lags
         // by distance from it). Reuse the mesh's own vertex placement so the

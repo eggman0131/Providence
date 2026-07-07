@@ -41,10 +41,12 @@ impl GridSnapshot {
         }
     }
 
-    /// Borrow this snapshot back as a [`TerrainFrame`] for picking.
+    /// Borrow this snapshot back as a [`TerrainFrame`] for picking. Picking reads
+    /// only heights, so this is a **heights-only** frame — its `types` slice is
+    /// empty (ADR 0023); nothing here ever colours a vertex.
     #[must_use]
     pub fn frame(&self) -> TerrainFrame<'_> {
-        TerrainFrame::new(self.width, self.height, &self.heights)
+        TerrainFrame::new(self.width, self.height, &self.heights, &[])
     }
 }
 
@@ -237,7 +239,7 @@ mod tests {
         // y-axis, the centre vertex sits exactly on the ray, so it is picked.
         let mut heights = [0; 9];
         heights[4] = 5; // centre vertex (1, 1)
-        let frame = TerrainFrame::new(3, 3, &heights);
+        let frame = TerrainFrame::new(3, 3, &heights, &[]);
         let ray = reticle_ray(&top_down(20.0), 1.0);
         assert_eq!(
             pick_vertex(&ray, &frame, 1.0),
@@ -262,14 +264,14 @@ mod tests {
             far: 1000.0,
         };
         let heights = [0; 9];
-        let frame = TerrainFrame::new(3, 3, &heights);
+        let frame = TerrainFrame::new(3, 3, &heights, &[]);
         let ray = reticle_ray(&camera, 1.0);
         assert_eq!(pick_vertex(&ray, &frame, 1.0), None);
     }
 
     #[test]
     fn an_empty_frame_has_no_pick() {
-        let frame = TerrainFrame::new(0, 0, &[]);
+        let frame = TerrainFrame::new(0, 0, &[], &[]);
         let ray = reticle_ray(&top_down(20.0), 1.0);
         assert_eq!(pick_vertex(&ray, &frame, 1.0), None);
     }
@@ -310,7 +312,7 @@ mod tests {
         // A cursor left of centre casts a ray leaning −x, so it picks a vertex
         // on the −x (left) side — the cursor-tracked pick issue #9 needs.
         let heights = [0; 9];
-        let frame = TerrainFrame::new(3, 3, &heights);
+        let frame = TerrainFrame::new(3, 3, &heights, &[]);
         let camera = top_down(20.0);
         let ndc = cursor_ndc((100.0, 300.0), (800, 600)); // well left of centre
         let ray = screen_ray(&camera, 800.0 / 600.0, ndc);

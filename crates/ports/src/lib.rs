@@ -24,33 +24,70 @@
 /// import `providence-core`: the frame is a *derived snapshot*, not core state.
 pub type Height = i32;
 
-/// A read-only, derived snapshot of the terrain height field handed to a
-/// [`RendererPort`] to draw (ADR 0020 §1).
+/// A vertex's derived terrain type in a [`TerrainFrame`] (ADR 0023). Mirrors the
+/// core's `TerrainType` (ADR 0017 §1) as a plain `ports` enum for the same
+/// reason [`Height`] mirrors the core height: it is a *derived* value the
+/// renderer draws — the shared carrier for the look *and* future gameplay
+/// (snow slows breeding, beaches forbid trees) — so defining it here keeps the
+/// interface crate (and every adapter) free of a `providence-core` import.
 ///
-/// It carries only what a renderer needs — the grid dimensions and a borrow of
-/// the row-major heights — and **no** simulation or camera/view state. The
-/// application builds one from the core's height field and passes it in; the
-/// renderer only ever sees this snapshot, never the core. Row-major: the vertex
-/// at `(x, y)` is `heights[y * width + x]`.
+/// The application classifies each vertex once (via the core's `classify_vertex`)
+/// and hands the result across; the renderer keys the material band on it and
+/// never re-derives the model's rules (ADR 0020 §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerrainType {
+    /// At or below the sea-level datum — underwater seabed.
+    Water,
+    /// Dry land within the shore band just above sea level — the coastline.
+    Shore,
+    /// Ordinary dry land between shore and mountain.
+    Land,
+    /// High ground at or above the mountain threshold.
+    Mountain,
+}
+
+/// A read-only, derived snapshot of the terrain the application hands a
+/// [`RendererPort`] to draw (ADR 0020 §1; grown per ADR 0023).
+///
+/// It carries only *derived* data a renderer needs — the grid dimensions, a
+/// borrow of the row-major heights, and a borrow of the row-major per-vertex
+/// terrain [`types`](TerrainFrame::types) — and **no** simulation or camera/view
+/// state. The application builds one from the core's height field and its
+/// classification and passes it in; the renderer only ever sees this snapshot,
+/// never the core. Row-major: the vertex at `(x, y)` is `heights[y * width + x]`
+/// (and likewise `types`).
+///
+/// The `types` slice may be **empty** for a frame built only to read heights —
+/// e.g. the picking snapshot, which never colours anything ([`type_at`] then
+/// yields `None`). A frame built to *draw* carries a full `width * height` slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerrainFrame<'a> {
     width: u32,
     height: u32,
     heights: &'a [Height],
+    types: &'a [TerrainType],
 }
 
 impl<'a> TerrainFrame<'a> {
-    /// Wrap a row-major height buffer as a drawable snapshot.
+    /// Wrap a row-major height buffer and its per-vertex terrain types as a
+    /// drawable snapshot.
     ///
-    /// `heights` is expected to be `width * height` long in row-major order;
-    /// [`TerrainFrame::get`] bounds-checks every access, so a mismatched buffer
-    /// yields `None` rather than a panic.
+    /// `heights` and `types` are each expected to be `width * height` long in
+    /// row-major order; [`get`](TerrainFrame::get) / [`type_at`](TerrainFrame::type_at)
+    /// bounds-check every access, so a mismatched (or, for `types`, deliberately
+    /// empty) buffer yields `None` rather than a panic.
     #[must_use]
-    pub const fn new(width: u32, height: u32, heights: &'a [Height]) -> Self {
+    pub const fn new(
+        width: u32,
+        height: u32,
+        heights: &'a [Height],
+        types: &'a [TerrainType],
+    ) -> Self {
         Self {
             width,
             height,
             heights,
+            types,
         }
     }
 
@@ -72,6 +109,13 @@ impl<'a> TerrainFrame<'a> {
         self.heights
     }
 
+    /// The backing row-major terrain-type buffer (ADR 0023). Empty for a
+    /// heights-only frame (e.g. picking).
+    #[must_use]
+    pub const fn types(&self) -> &[TerrainType] {
+        self.types
+    }
+
     /// The height at `(x, y)`, or `None` if the coordinate is out of bounds or
     /// the backing buffer is too short for the stated dimensions.
     #[must_use]
@@ -81,6 +125,18 @@ impl<'a> TerrainFrame<'a> {
         }
         let index = y as usize * self.width as usize + x as usize;
         self.heights.get(index).copied()
+    }
+
+    /// The terrain type at `(x, y)`, or `None` if the coordinate is out of
+    /// bounds or the `types` buffer is too short (including a heights-only frame
+    /// whose `types` is empty). ADR 0023.
+    #[must_use]
+    pub fn type_at(&self, x: u32, y: u32) -> Option<TerrainType> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let index = y as usize * self.width as usize + x as usize;
+        self.types.get(index).copied()
     }
 }
 
@@ -155,6 +211,14 @@ pub trait SimDriver {
     /// [`TerrainFrame`]: the vertex at `(x, y)` is `heights()[y * width() + x]`.
     fn heights(&self) -> &[Height];
 
+    /// The current row-major per-vertex terrain types to draw (ADR 0023) — the
+    /// interactive twin of [`heights`](SimDriver::heights), so the renderer
+    /// rebuilds the *material-banded* surface from the fresh snapshot after each
+    /// shaping edit without ever re-deriving the model's classification rules.
+    /// Same length and order as `heights`; the implementer recomputes it
+    /// whenever a submitted command actually moves the field.
+    fn types(&self) -> &[TerrainType];
+
     /// A revision that **bumps whenever the heights change**, so the renderer
     /// can tell a fresh frame from a repeat and animate the change (ADR 0022
     /// §3). A no-op command (out of bounds, at the ceiling, or refused by an
@@ -164,13 +228,15 @@ pub trait SimDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{Height, SimDriver, TerrainCommand};
+    use super::{Height, SimDriver, TerrainCommand, TerrainType};
 
     /// A minimal in-crate `SimDriver` proving the port is implementable — and
-    /// object-safe — without importing the core: it serves a tiny fixed grid and
-    /// records the last command, bumping its revision on each submit.
+    /// object-safe — without importing the core: it serves a tiny fixed grid
+    /// (heights and their derived types) and records the last command, bumping
+    /// its revision on each submit.
     struct MockDriver {
         cells: [Height; 4],
+        kinds: [TerrainType; 4],
         revision: u64,
         last: Option<TerrainCommand>,
     }
@@ -189,6 +255,9 @@ mod tests {
         fn heights(&self) -> &[Height] {
             &self.cells
         }
+        fn types(&self) -> &[TerrainType] {
+            &self.kinds
+        }
         fn revision(&self) -> u64 {
             self.revision
         }
@@ -198,14 +267,22 @@ mod tests {
     fn a_mock_realises_the_sim_driver_port() {
         let mut driver = MockDriver {
             cells: [0, 1, 1, 2],
+            kinds: [
+                TerrainType::Water,
+                TerrainType::Shore,
+                TerrainType::Shore,
+                TerrainType::Land,
+            ],
             revision: 0,
             last: None,
         };
-        // The snapshot reads are consistent (width × height == buffer length).
+        // The snapshot reads are consistent (width × height == buffer length),
+        // for both the heights and the per-vertex types (ADR 0023).
         assert_eq!(
             driver.width() as usize * driver.height() as usize,
             driver.heights().len()
         );
+        assert_eq!(driver.heights().len(), driver.types().len());
         // Submitting drives the sim through the port and bumps the revision.
         driver.submit(TerrainCommand::Raise { x: 0, y: 0 });
         assert_eq!(driver.last, Some(TerrainCommand::Raise { x: 0, y: 0 }));

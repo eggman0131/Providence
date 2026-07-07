@@ -19,8 +19,48 @@
 use providence_config::{Params, TerrainParams};
 use providence_core::rng::SplitMix64;
 use providence_core::state::{State, step};
-use providence_core::terrain::{World, generate, place_features};
-use providence_ports::{Height, SimDriver, TerrainCommand};
+use providence_core::terrain::{
+    TerrainType as CoreTerrainType, World, classify_vertex, generate, place_features,
+};
+use providence_ports::{Height, SimDriver, TerrainCommand, TerrainType};
+
+/// Classify a row-major height buffer into per-vertex terrain types for the
+/// derived render snapshot (ADR 0023).
+///
+/// The application side of the snapshot growth: it reuses the core's
+/// [`classify_vertex`] (ADR 0017 §1) over each height and maps the core's
+/// `TerrainType` to the plain [`ports` mirror](providence_ports::TerrainType) the
+/// renderer draws — so the classification *rules* live only in the core and the
+/// renderer keys on the derived result, never re-deriving them. Pure composition
+/// of core reads; the same thresholds drive the workbench census.
+///
+/// - `sea_level` — `sim.worldgen.sea_level`
+/// - `shore_band` — `content.terrain.shore.band`
+/// - `mountain_min` — `content.terrain.mountain.min_height`
+#[must_use]
+pub fn classify_heights(
+    heights: &[Height],
+    sea_level: i32,
+    shore_band: u32,
+    mountain_min: i32,
+) -> Vec<TerrainType> {
+    heights
+        .iter()
+        .map(|&height| to_ports_type(classify_vertex(height, sea_level, shore_band, mountain_min)))
+        .collect()
+}
+
+/// Map the core's derived terrain type to the plain `providence-ports` mirror
+/// the renderer draws (ADR 0023). The application layer is the natural home for
+/// this core↔ports translation (docs/20-architecture.md §2.3).
+fn to_ports_type(kind: CoreTerrainType) -> TerrainType {
+    match kind {
+        CoreTerrainType::Water => TerrainType::Water,
+        CoreTerrainType::Shore => TerrainType::Shore,
+        CoreTerrainType::Land => TerrainType::Land,
+        CoreTerrainType::Mountain => TerrainType::Mountain,
+    }
+}
 
 /// A running game session: current state plus the config and seed it runs
 /// under (docs/20-architecture.md §2.3).
@@ -71,6 +111,18 @@ impl Session {
 pub struct WorkbenchSession {
     world: World,
     terrain: TerrainParams,
+    /// The classification thresholds (`sim.worldgen.sea_level`,
+    /// `content.terrain.shore.band`, `content.terrain.mountain.min_height`),
+    /// kept so the per-vertex terrain [`types`](Self::types) can be re-derived
+    /// after every shaping edit (ADR 0023). Session-constant.
+    sea_level: i32,
+    shore_band: u32,
+    mountain_min: i32,
+    /// The current per-vertex terrain types, row-major like the heights — the
+    /// derived render snapshot's type channel (ADR 0023). Recomputed on every
+    /// command that actually moves the field, served through
+    /// [`SimDriver::types`].
+    types: Vec<TerrainType>,
     tick: u64,
     revision: u64,
     log: Vec<(u64, TerrainCommand)>,
@@ -79,14 +131,24 @@ pub struct WorkbenchSession {
 impl WorkbenchSession {
     /// Build a session over a freshly generated world (ADR 0021): the seed and
     /// `sim.worldgen.*` generate the height field, `content.terrain.*` scatter
-    /// its immovables — exactly as the workbench composition root does.
+    /// its immovables — exactly as the workbench composition root does. The
+    /// per-vertex terrain types are classified up front (ADR 0023).
     #[must_use]
     pub fn new(params: &Params) -> Self {
         let field = generate(&params.sim.worldgen, params.sim.terrain.max_step);
         let features = place_features(&field, &params.sim.worldgen, &params.content.terrain);
+        let world = World::new(field, Some(features));
+        let sea_level = params.sim.worldgen.sea_level;
+        let shore_band = params.content.terrain.shore.band;
+        let mountain_min = params.content.terrain.mountain.min_height;
+        let types = classify_heights(world.heights(), sea_level, shore_band, mountain_min);
         Self {
-            world: World::new(field, Some(features)),
+            world,
             terrain: params.sim.terrain.clone(),
+            sea_level,
+            shore_band,
+            mountain_min,
+            types,
             tick: 0,
             revision: 0,
             log: Vec::new(),
@@ -123,8 +185,17 @@ impl SimDriver for WorkbenchSession {
         // Revision tracks *visible* change: bump only when the heights actually
         // moved, so the renderer animates real cascades and ignores no-ops
         // (out-of-bounds, ceiling clamp, or an immovable refusal). ADR 0022 §3.
+        // A real change also re-derives the per-vertex types the renderer bands
+        // the surface by, so the material bands track the moving coastline and
+        // relief (ADR 0023).
         if outcome.moved > 0 {
             self.revision += 1;
+            self.types = classify_heights(
+                self.world.heights(),
+                self.sea_level,
+                self.shore_band,
+                self.mountain_min,
+            );
         }
     }
 
@@ -138,6 +209,10 @@ impl SimDriver for WorkbenchSession {
 
     fn heights(&self) -> &[Height] {
         self.world.heights()
+    }
+
+    fn types(&self) -> &[TerrainType] {
+        &self.types
     }
 
     fn revision(&self) -> u64 {
@@ -155,7 +230,7 @@ mod tests {
 
     use super::{Session, WorkbenchSession};
     use providence_core::terrain::{World, generate, place_features};
-    use providence_ports::{SimDriver, TerrainCommand};
+    use providence_ports::{SimDriver, TerrainCommand, TerrainType};
 
     fn params() -> Params {
         Params {
@@ -264,6 +339,43 @@ mod tests {
             session.heights().len(),
             session.width() as usize * session.height() as usize,
             "the row-major snapshot is w × h",
+        );
+        // The type channel (ADR 0023) is served alongside heights, same shape.
+        assert_eq!(
+            session.types().len(),
+            session.heights().len(),
+            "one derived terrain type per vertex",
+        );
+        // A flat sea vertex classifies as water up front.
+        let (sx, sy) = flat_sea_vertex(&session, &params);
+        assert_eq!(
+            session.types()[(sy * session.width() + sx) as usize],
+            TerrainType::Water,
+            "a below-datum sea vertex is water",
+        );
+    }
+
+    #[test]
+    fn a_real_edit_rederives_the_types_so_bands_track_the_change() {
+        // Raising a flat sea vertex one step lifts it from the datum into the
+        // shore band, so its derived type flips water → shore — the material
+        // bands follow the moving coastline (ADR 0023). A no-op leaves it.
+        let params = params();
+        let mut session = WorkbenchSession::new(&params);
+        let (sx, sy) = flat_sea_vertex(&session, &params);
+        let index = (sy * session.width() + sx) as usize;
+        assert_eq!(session.types()[index], TerrainType::Water, "starts as sea");
+
+        session.submit(TerrainCommand::Raise { x: sx, y: sy });
+        assert_eq!(
+            session.types()[index],
+            TerrainType::Shore,
+            "one raise lifts the sea floor into the shore band",
+        );
+        assert_eq!(
+            session.types().len(),
+            session.heights().len(),
+            "the re-derived channel still matches the heights",
         );
     }
 
