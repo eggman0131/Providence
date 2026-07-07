@@ -337,4 +337,74 @@ mod tests {
         assert_eq!(field.get(1, 1), Some(-1), "target dropped below the datum");
         assert!(field.satisfies_step_invariant(MAX_STEP));
     }
+
+    #[test]
+    fn a_deep_corner_cone_is_bounded_by_both_the_ceiling_and_the_grid() {
+        // The ceiling and the world edge bound the *same* cascade: raising a
+        // corner on a small grid with a low ceiling builds a quarter-diamond
+        // that neither rises past `max_height` nor wraps off the edge.
+        let ceiling = 3;
+        let mut field = HeightField::flat(5, 5, 0);
+        for _ in 0..ceiling {
+            raise(&mut field, 0, 0, &params(ceiling, 1));
+        }
+
+        // A stepped quarter-cone descending from the capped corner: height at a
+        // vertex is `ceiling − Manhattan-distance`, clipped at 0.
+        assert_eq!(field.get(0, 0), Some(3), "corner pinned at the ceiling");
+        assert_eq!(field.get(1, 0), Some(2), "one step down along the edge");
+        assert_eq!(field.get(0, 1), Some(2));
+        assert_eq!(field.get(1, 1), Some(1), "the diagonal drops two");
+        assert_eq!(field.get(2, 0), Some(1));
+        assert_eq!(field.get(3, 0), Some(0), "the cone has run out before here");
+
+        // No vertex anywhere exceeds the ceiling.
+        for y in 0..field.height() {
+            for x in 0..field.width() {
+                assert!(
+                    field.get(x, y).unwrap() <= ceiling,
+                    "({x},{y}) rose above the ceiling"
+                );
+            }
+        }
+
+        // A further raise is a clamped no-op — the corner is already capped.
+        let outcome = raise(&mut field, 0, 0, &params(ceiling, 1));
+        assert_eq!(
+            outcome,
+            ShapeOutcome::UNCHANGED,
+            "capped corner cannot rise"
+        );
+        assert!(field.satisfies_step_invariant(MAX_STEP));
+    }
+
+    #[test]
+    fn the_cascade_uses_the_configured_max_step() {
+        // Phase 2's cascades all ran at the shipped unit step; prove the cascade
+        // reads `max_step` by driving it at 2 — neighbours are pulled to within
+        // two, not one, of a moved vertex.
+        let params = TerrainParams {
+            max_step: 2,
+            max_height: 64,
+            raise: RaiseParams { mana_cost: 1 },
+        };
+        let mut field = HeightField::flat(5, 5, 0);
+        raise(&mut field, 2, 2, &params); // target to 2; neighbours already within 2
+        let outcome = raise(&mut field, 2, 2, &params); // target to 4; ring must follow
+
+        assert_eq!(field.get(2, 2), Some(4), "target rose two steps of two");
+        for (x, y) in [(1, 2), (3, 2), (2, 1), (2, 3)] {
+            assert_eq!(field.get(x, y), Some(2), "ring pulled to within max_step");
+        }
+        assert_eq!(
+            field.get(0, 2),
+            Some(0),
+            "two out stays flat (diff 2 == step)"
+        );
+        assert_eq!(outcome.moved, 5, "target + four neighbours");
+        assert!(
+            field.satisfies_step_invariant(2),
+            "the invariant holds at the configured step"
+        );
+    }
 }
