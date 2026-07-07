@@ -10,8 +10,8 @@
 
 use std::sync::Arc;
 
-use providence_config::RenderParams;
-use providence_ports::{RendererPort, TerrainFrame};
+use providence_config::{InputParams, PaletteParams, PointerButton, RenderParams};
+use providence_ports::{RendererPort, SimDriver, TerrainFrame};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -24,9 +24,9 @@ use crate::error::RendererError;
 use crate::gpu::{self, TerrainScene};
 #[cfg(feature = "debug-hud")]
 use crate::hud::{Hud, Readout, ScreenDescriptor};
+use crate::input::{is_shaping_click, shape_action};
 use crate::mesh::{Mesh, build_mesh};
-#[cfg(feature = "debug-hud")]
-use crate::pick::GridSnapshot;
+use crate::pick::{GridSnapshot, cursor_ndc, pick_vertex, screen_ray};
 
 /// The window title bar text for the workbench.
 const WINDOW_TITLE: &str = "Providence — Terrain Workbench";
@@ -37,17 +37,32 @@ const WINDOW_TITLE: &str = "Providence — Terrain Workbench";
 /// plumbing, not a design tunable (the sensitivity lives in config).
 const PIXEL_SCROLL_TO_LINES: f32 = 0.02;
 
+/// Map a `winit` mouse button to the config-level [`PointerButton`] the shaping
+/// bindings speak, or `None` for a button the bindings can't name (back/forward/
+/// extra). Converting at the window edge keeps the input mapping ([`crate::input`])
+/// `winit`-free and unit-tested in the gate (ADR 0022; I9).
+fn pointer_button(button: MouseButton) -> Option<PointerButton> {
+    match button {
+        MouseButton::Left => Some(PointerButton::Left),
+        MouseButton::Right => Some(PointerButton::Right),
+        MouseButton::Middle => Some(PointerButton::Middle),
+        _ => None,
+    }
+}
+
 /// A [`RendererPort`] that opens a window and draws the terrain in 3D.
 ///
-/// `present` builds the drawable mesh from the snapshot; [`run`](WindowRenderer::run)
-/// then launches the event loop and blocks until the window closes. Because the
-/// terrain is static in issue #8, one presented frame is drawn every redraw.
+/// `present` seeds the initial drawable mesh from the snapshot;
+/// [`run`](WindowRenderer::run) then launches the event loop, holding a
+/// `&mut dyn SimDriver` so a shaping click submits a discrete `TerrainCommand`
+/// and the changed land is pulled back and redrawn (ADR 0022 §4). Dragging still
+/// orbits/pans/zooms the camera exactly as in issue #8.
 pub struct WindowRenderer {
     params: RenderParams,
     mesh: Mesh,
-    /// The presented grid, kept so the HUD can pick the reticle vertex each
-    /// frame (issue #8 Phase 3). Only needed by the overlay.
-    #[cfg(feature = "debug-hud")]
+    /// The presented grid, kept so a click can pick the vertex under the cursor
+    /// (issue #9 Phase 2) and the HUD can pick the reticle vertex (issue #8
+    /// Phase 3). Refreshed from the driver after every shaping command.
     grid: GridSnapshot,
 }
 
@@ -58,23 +73,27 @@ impl WindowRenderer {
         Self {
             params,
             mesh: Mesh::default(),
-            #[cfg(feature = "debug-hud")]
             grid: GridSnapshot::default(),
         }
     }
 
-    /// Launch the `winit` event loop and block until the window is closed. Must
-    /// be called on the main thread (a `winit` requirement).
-    pub fn run(self) -> Result<(), RendererError> {
+    /// Launch the `winit` event loop and block until the window is closed,
+    /// driving the interactive shaping seam (ADR 0022 §4). `driver` is the
+    /// application session the renderer submits commands to and pulls fresh
+    /// snapshots from; `input` binds the shaping controls (`input.shape.*`). The
+    /// renderer holds only the [`SimDriver`] trait — never the core (I2/I4).
+    /// Must be called on the main thread (a `winit` requirement).
+    pub fn run(self, driver: &mut dyn SimDriver, input: InputParams) -> Result<(), RendererError> {
         let event_loop =
             EventLoop::new().map_err(|error| RendererError::EventLoop(error.to_string()))?;
         event_loop.set_control_flow(ControlFlow::Wait);
         let mut app = WorkbenchApp {
             params: self.params,
             mesh: self.mesh,
-            state: None,
-            #[cfg(feature = "debug-hud")]
             grid: self.grid,
+            input,
+            driver,
+            state: None,
         };
         event_loop
             .run_app(&mut app)
@@ -89,26 +108,31 @@ impl RendererPort for WindowRenderer {
             self.params.mesh.vertical_scale,
             &self.params.palette,
         );
-        #[cfg(feature = "debug-hud")]
-        {
-            self.grid = GridSnapshot::from_frame(&frame);
-        }
+        // The grid is now kept unconditionally: a shaping click picks against it
+        // (issue #9 Phase 2), not only the debug HUD (issue #8 Phase 3).
+        self.grid = GridSnapshot::from_frame(&frame);
     }
 }
 
-/// The `winit` application: the config and mesh to draw, plus the live GPU
-/// state once the window exists.
-struct WorkbenchApp {
+/// The `winit` application: the config, initial mesh, and input bindings to
+/// draw and drive with, the `SimDriver` the interactive seam submits to
+/// (ADR 0022 §4), plus the live GPU state once the window exists.
+struct WorkbenchApp<'driver> {
     params: RenderParams,
     mesh: Mesh,
-    state: Option<WindowState>,
     /// The presented grid, handed to the window state once the window exists so
-    /// the HUD can pick against it (issue #8 Phase 3).
-    #[cfg(feature = "debug-hud")]
+    /// a click (and the HUD) can pick against it.
     grid: GridSnapshot,
+    /// The shaping controls (`input.shape.*`) — which button raises/lowers and
+    /// the click-vs-drag threshold.
+    input: InputParams,
+    /// The application session the renderer shapes through: `submit` a command,
+    /// then pull `heights`/`revision`. Only the trait is held — never the core.
+    driver: &'driver mut dyn SimDriver,
+    state: Option<WindowState>,
 }
 
-impl ApplicationHandler for WorkbenchApp {
+impl ApplicationHandler for WorkbenchApp<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return; // already initialised; ignore repeat resume
@@ -127,11 +151,11 @@ impl ApplicationHandler for WorkbenchApp {
                 return;
             }
         };
-        match WindowState::new(window, &self.params, &self.mesh) {
-            Ok(state) => {
-                #[cfg(feature = "debug-hud")]
-                let mut state = state;
-                #[cfg(feature = "debug-hud")]
+        match WindowState::new(window, &self.params, &self.mesh, &self.input) {
+            Ok(mut state) => {
+                // The window picks against the presented grid on a click, so it
+                // is seeded unconditionally now (issue #9 Phase 2), not only for
+                // the HUD reticle (issue #8 Phase 3).
                 state.set_grid(self.grid.clone());
                 self.state = Some(state);
             }
@@ -143,7 +167,10 @@ impl ApplicationHandler for WorkbenchApp {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(state) = self.state.as_mut() else {
+        // Borrow the window state and the driver as disjoint fields so a click
+        // can drive both (the pick lives in the state, the submit on the driver).
+        let WorkbenchApp { state, driver, .. } = self;
+        let Some(state) = state.as_mut() else {
             return;
         };
         match event {
@@ -154,7 +181,7 @@ impl ApplicationHandler for WorkbenchApp {
                 state: element_state,
                 button,
                 ..
-            } => state.mouse_button(button, element_state),
+            } => state.mouse_button(button, element_state, &mut **driver),
             WindowEvent::CursorMoved { position, .. } => state.cursor_moved(position.x, position.y),
             WindowEvent::MouseWheel { delta, .. } => state.mouse_wheel(delta),
             _ => {}
@@ -174,6 +201,19 @@ struct DragState {
     panning: bool,
 }
 
+/// One in-flight held-button gesture, tracked so release can tell a shaping
+/// *click* from a camera *drag* (ADR 0022, the Director's control-scheme
+/// ruling): which platform button began it, and how far the cursor has
+/// travelled (physical pixels) since the press.
+#[derive(Clone, Copy, Debug)]
+struct PressGesture {
+    /// The button pressed — resolved to a shaping action on release.
+    button: MouseButton,
+    /// Accumulated cursor path length since the press; compared to
+    /// `input.shape.click_drag_threshold_px` to classify the gesture.
+    motion_px: f32,
+}
+
 /// Live GPU state for the open window: surface, device/queue, the prepared
 /// scene, the depth buffer sized to the surface, and the interactive camera
 /// controller with its in-flight drag gesture (issue #8 Phase 2).
@@ -187,19 +227,32 @@ struct WindowState {
     depth_view: wgpu::TextureView,
     controller: OrbitController,
     drag: DragState,
+    /// The in-flight press gesture, if a button is down (issue #9 Phase 2).
+    press: Option<PressGesture>,
+    /// The shaping controls (`input.shape.*`): bindings + click-vs-drag slack.
+    input: InputParams,
+    /// The palette, so a shaping command can rebuild the mesh from the fresh
+    /// snapshot with the same colouring (issue #9 Phase 2).
+    palette: PaletteParams,
+    /// The presented grid: a click picks the vertex under the cursor from it
+    /// (issue #9 Phase 2), and the HUD picks the reticle vertex (issue #8
+    /// Phase 3). Refreshed from the driver after every shaping command.
+    grid: GridSnapshot,
+    /// The mesh's vertical scale, so picks and rebuilt geometry line up with
+    /// what is drawn.
+    vertical_scale: f32,
     /// The read-only debug/HUD overlay, when enabled (issue #8 Phase 3).
     #[cfg(feature = "debug-hud")]
     hud: Option<Hud>,
-    /// The presented grid the HUD picks the reticle vertex from.
-    #[cfg(feature = "debug-hud")]
-    grid: GridSnapshot,
-    /// The mesh's vertical scale, so HUD picks line up with what is drawn.
-    #[cfg(feature = "debug-hud")]
-    vertical_scale: f32,
 }
 
 impl WindowState {
-    fn new(window: Arc<Window>, params: &RenderParams, mesh: &Mesh) -> Result<Self, RendererError> {
+    fn new(
+        window: Arc<Window>,
+        params: &RenderParams,
+        mesh: &Mesh,
+        input: &InputParams,
+    ) -> Result<Self, RendererError> {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(Arc::clone(&window))
@@ -249,39 +302,114 @@ impl WindowState {
             depth_view,
             controller: OrbitController::from_params(&params.camera),
             drag: DragState::default(),
+            press: None,
+            input: input.clone(),
+            palette: params.palette.clone(),
+            grid: GridSnapshot::default(),
+            vertical_scale: params.mesh.vertical_scale,
             #[cfg(feature = "debug-hud")]
             hud,
-            #[cfg(feature = "debug-hud")]
-            grid: GridSnapshot::default(),
-            #[cfg(feature = "debug-hud")]
-            vertical_scale: params.mesh.vertical_scale,
         })
     }
 
-    /// Hand the presented grid to the window state so the HUD can pick the
-    /// reticle vertex each frame (issue #8 Phase 3).
-    #[cfg(feature = "debug-hud")]
+    /// Hand the presented grid to the window state so a click can pick the
+    /// vertex under the cursor (issue #9 Phase 2) and the HUD can pick the
+    /// reticle vertex (issue #8 Phase 3).
     fn set_grid(&mut self, grid: GridSnapshot) {
         self.grid = grid;
     }
 
-    /// Track a mouse button press/release: left arms orbit, right arms pan.
-    fn mouse_button(&mut self, button: MouseButton, state: ElementState) {
+    /// Track a mouse button press/release (issue #8 Phase 2 camera + issue #9
+    /// Phase 2 shaping). Left arms orbit, right arms pan (unchanged); every
+    /// press also begins a [`PressGesture`], and a release that stayed a click
+    /// shapes the picked vertex through `driver` (ADR 0022 §3).
+    fn mouse_button(
+        &mut self,
+        button: MouseButton,
+        state: ElementState,
+        driver: &mut dyn SimDriver,
+    ) {
         let pressed = state == ElementState::Pressed;
         match button {
             MouseButton::Left => self.drag.orbiting = pressed,
             MouseButton::Right => self.drag.panning = pressed,
             _ => {}
         }
+        if pressed {
+            // Any button may be a shaping click — a rebind can put raise/lower on
+            // the middle button. Motion accrues in `cursor_moved`.
+            self.press = Some(PressGesture {
+                button,
+                motion_px: 0.0,
+            });
+        } else if let Some(press) = self.press.take()
+            && press.button == button
+        {
+            self.resolve_click(press, driver);
+        }
     }
 
-    /// Turn cursor motion into an orbit or pan while a button is held, then
-    /// redraw. The very first move after a press seeds `last_cursor` and
-    /// produces no jump.
+    /// A held button was released: if the gesture stayed a *click* (cursor moved
+    /// no more than `input.shape.click_drag_threshold_px`) and the button is
+    /// bound to a shaping action, pick the vertex under the cursor and submit the
+    /// command through `driver`, then pull the fresh snapshot and rebuild the
+    /// drawn mesh when the heights actually moved (ADR 0022 §3, the
+    /// submit → pull → redraw path). A *drag* already moved the camera live and
+    /// shapes nothing.
+    fn resolve_click(&mut self, press: PressGesture, driver: &mut dyn SimDriver) {
+        if !is_shaping_click(press.motion_px, &self.input.shape) {
+            return; // a camera drag, already applied — not a shaping click
+        }
+        let Some(pointer) = pointer_button(press.button) else {
+            return; // a button the bindings can't name
+        };
+        let Some(action) = shape_action(pointer, &self.input.shape) else {
+            return; // bound to neither raise nor lower
+        };
+        let Some((cursor_x, cursor_y)) = self.drag.last_cursor else {
+            return; // no cursor position yet — nothing to pick
+        };
+
+        // Resolve the vertex under the cursor through the same ray/pick maths the
+        // reticle uses (issue #8 Phase 3), generalised to the live cursor. All
+        // float/ray work stays here at the edge; only an integer command crosses.
+        let size = (self.config.width, self.config.height);
+        let ndc = cursor_ndc((cursor_x as f32, cursor_y as f32), size);
+        let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+        let ray = screen_ray(&self.controller.camera(), aspect, ndc);
+        let Some(picked) = pick_vertex(&ray, &self.grid.frame(), self.vertical_scale) else {
+            return; // the cursor is off the terrain
+        };
+
+        // Input reaches the sim ONLY here, as a discrete TerrainCommand (ADR
+        // 0022 §3). The renderer holds the SimDriver trait, never the core.
+        let before = driver.revision();
+        driver.submit(action.command(picked.x, picked.y));
+        if driver.revision() == before {
+            return; // a no-op: ceiling, out of bounds, or an immovable refusal
+        }
+
+        // Pull the fresh snapshot and rebuild what is drawn.
+        let (width, height) = (driver.width(), driver.height());
+        let heights = driver.heights().to_vec();
+        let frame = TerrainFrame::new(width, height, &heights);
+        let mesh = build_mesh(&frame, self.vertical_scale, &self.palette);
+        self.grid = GridSnapshot::from_frame(&frame);
+        self.scene.set_mesh(&self.device, &mesh);
+        self.window.request_redraw();
+    }
+
+    /// Turn cursor motion into an orbit or pan while a button is held, and accrue
+    /// it into the active press so a release can tell a click from a drag, then
+    /// redraw. The very first move after a press seeds `last_cursor` and produces
+    /// no jump.
     fn cursor_moved(&mut self, x: f64, y: f64) {
         if let Some((last_x, last_y)) = self.drag.last_cursor {
             let dx = (x - last_x) as f32;
             let dy = (y - last_y) as f32;
+            if let Some(press) = self.press.as_mut() {
+                press.motion_px += (dx * dx + dy * dy).sqrt();
+            }
             if self.drag.orbiting {
                 self.controller.orbit(dx, dy);
                 self.window.request_redraw();

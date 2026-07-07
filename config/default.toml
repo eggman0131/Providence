@@ -159,3 +159,22 @@ height = 720
 enabled = true       # draw the overlay when the debug-hud feature is built in
 show_camera = true   # show the camera-pose section (yaw/pitch/distance, eye)
 show_reticle = true  # show the reticle vertex (x, y) + height section
+
+# --- Input mapping (docs/40-parameterisation.md §2.2, ADR 0022) ---
+# input.* is the interactive workbench's control mapping. Like render.*, it is
+# NON-deterministic and sits OUTSIDE the determinism boundary: the loader
+# projects it into a standalone InputParams handed to the renderer adapter,
+# which turns a mouse gesture into a discrete TerrainCommand. Only the binding
+# lives here; the command it issues is integer and replayable (I3).
+# (render.animation.* — the cascade-animation timings — is still pending Phase 3.)
+
+[input.shape]
+# The terrain-shaping controls (the Director's control-scheme ruling, ADR 0022):
+# left-click raises the picked vertex, right-click lowers it; a press-and-release
+# without meaningful cursor motion is a shaping click, while a drag still
+# orbits/pans/zooms the camera exactly as before.
+raise_button = "left"          # "left" | "right" | "middle" — button that raises
+lower_button = "right"         # button that lowers (the mirror of raise)
+# Max accumulated cursor motion (physical pixels) still treated as a click rather
+# than a camera drag. 0 makes any motion a drag.
+click_drag_threshold_px = 6.0

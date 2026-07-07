@@ -124,7 +124,7 @@ Steps 6–9 are fully deterministic and independently testable with test doubles
 
 **Real-time workbench refinement ([ADR 0020](./decisions/0020-workbench-runtime-and-rendererport.md)).** The push in step 10 is the *headless/batch* shape. In the interactive workbench the renderer adapter owns the `winit` event loop — the window drives redraws — so `RendererPort` is called *by* the loop with the current `TerrainFrame`, not from an app-owned `for` loop. The camera moves entirely inside the adapter and never crosses the determinism boundary, so this real-time view does not weaken I3.
 
-**Interactive submit/pull flow ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)).** Alongside that batch push, the live shaping path runs through the `SimDriver` port the renderer *holds*:
+**Interactive submit/pull flow ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)).** Alongside that batch push, the live shaping path runs through the `SimDriver` port the renderer *holds* — now **wired end-to-end** (issue #9/#10 Phase 2): the composition root builds a `WorkbenchSession` and hands `&mut session as &mut dyn SimDriver` into `WindowRenderer::run`, and the window event loop drives the loop below on every shaping click:
 
 ```
 a. Input (a click/drag) is mapped, at the renderer edge, to a discrete TerrainCommand
@@ -138,7 +138,7 @@ e. Replay re-applies the recorded (tick, command) log to a fresh World from the 
    seed + params, stepping tick-by-tick, and reproduces the field bit-for-bit (I3).
 ```
 
-Steps b–c are the concrete `InputPort` (§2.4): input reaches the sim *only* as a recorded command, and no wall-clock, float, or frame-rate value ever enters the core — so a live, mutating sim stays replayable. When a future subsystem needs per-tick background evolution, a wall-clock-*paced* accumulator can decide *when* to step in the renderer loop, never *what* a step computes (ADR 0022 §5).
+Steps b–c are the concrete `InputPort` (§2.4): input reaches the sim *only* as a recorded command, and no wall-clock, float, or frame-rate value ever enters the core — so a live, mutating sim stays replayable. Step **a** is realised in the renderer adapter (issue #9 Phase 2): a press→release below the `input.shape.click_drag_threshold_px` motion threshold is a shaping *click* — the cursor picks a vertex (the reticle pick generalised to the live cursor) and the bound button (`input.shape.{raise,lower}_button`) selects raise/lower; more motion is a camera *drag* and shapes nothing. Step **d** snaps to the new shape (there is **no** animation yet — the cascade redraws in one step; interpolation is Phase 3, `render.animation.*`). When a future subsystem needs per-tick background evolution, a wall-clock-*paced* accumulator can decide *when* to step in the renderer loop, never *what* a step computes (ADR 0022 §5).
 
 ---
 

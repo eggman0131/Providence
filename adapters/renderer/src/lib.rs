@@ -30,6 +30,7 @@ pub mod context;
 pub mod error;
 pub mod gpu;
 pub mod headless;
+pub mod input;
 pub mod light;
 pub mod math;
 pub mod mesh;
@@ -44,7 +45,8 @@ pub mod hud;
 pub use camera::{Camera, OrbitController};
 pub use error::RendererError;
 pub use headless::HeadlessRenderer;
-pub use pick::{PickedVertex, Ray};
+pub use input::{ShapeAction, is_shaping_click, shape_action};
+pub use pick::{PickedVertex, Ray, cursor_ndc};
 pub use window::WindowRenderer;
 
 use providence_ports::{RendererPort, TerrainFrame};

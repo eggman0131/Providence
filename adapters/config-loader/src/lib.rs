@@ -22,7 +22,7 @@ use std::fs;
 use std::path::Path;
 
 use garde::Validate;
-use providence_config::{Params, RenderParams};
+use providence_config::{InputParams, Params, RenderParams};
 
 pub use crate::authoring::ConfigRoot;
 pub use crate::error::ConfigError;
@@ -75,6 +75,18 @@ pub fn params_from_layers(layers: &[Layer]) -> Result<Params, ConfigError> {
 pub fn render_params_from_layers(layers: &[Layer]) -> Result<RenderParams, ConfigError> {
     let root = config_root_from_layers(layers)?;
     Ok(root.into_render_params())
+}
+
+/// Load, merge, and fully validate the layers, returning the standalone input
+/// params (ADR 0022).
+///
+/// A third disjoint projection alongside [`params_from_layers`] and
+/// [`render_params_from_layers`]: the same validated config yields the core
+/// [`Params`], the presentation [`RenderParams`], and these [`InputParams`],
+/// and only this one carries the workbench's shaping bindings to the renderer.
+pub fn input_params_from_layers(layers: &[Layer]) -> Result<InputParams, ConfigError> {
+    let root = config_root_from_layers(layers)?;
+    Ok(root.into_input_params())
 }
 
 /// Load, merge, and fully validate the layers, returning the authoring root
@@ -142,6 +154,14 @@ pub fn load_render(dir: &Path) -> Result<RenderParams, ConfigError> {
     render_params_from_layers(&read_layers(dir, None)?)
 }
 
+/// Load the input params (`input.*`) from a config directory — the renderer
+/// adapter's input load path, mirroring [`load_render`] (ADR 0022). Uses the
+/// same governed layer order; input config is profile-independent for now, so
+/// no profile is interposed.
+pub fn load_input(dir: &Path) -> Result<InputParams, ConfigError> {
+    input_params_from_layers(&read_layers(dir, None)?)
+}
+
 /// Read the ordered config layers from `dir`: `default.toml` (required) →
 /// `<profile>.toml` (when named) → `local.toml` (optional). The shared file
 /// step behind [`load_with_profile`] and [`load_render`]; a named-but-missing
@@ -188,9 +208,12 @@ fn read_layers(dir: &Path, profile: Option<&str>) -> Result<Vec<Layer>, ConfigEr
 
 #[cfg(test)]
 mod tests {
-    use providence_config::{ManaMode, Shape};
+    use providence_config::{ManaMode, PointerButton, Shape};
 
-    use super::{Layer, SUPPORTED_SCHEMA_VERSION, params_from_layers, render_params_from_layers};
+    use super::{
+        Layer, SUPPORTED_SCHEMA_VERSION, input_params_from_layers, params_from_layers,
+        render_params_from_layers,
+    };
 
     /// The `[render.*]` block shared by the fixtures — mirrors the shipped
     /// `config/default.toml` so the default layer stays complete now that
@@ -211,6 +234,13 @@ mod tests {
         [render.mesh]\nvertical_scale = 1.0\n\n\
         [render.window]\nwidth = 1280\nheight = 720\n\n\
         [render.hud]\nenabled = true\nshow_camera = true\nshow_reticle = true\n";
+
+    /// The `[input.*]` block shared by the fixtures — mirrors the shipped
+    /// `config/default.toml` so the default layer stays complete now that
+    /// `input` is a required section (ADR 0022).
+    const INPUT_TOML: &str = "\
+        [input.shape]\n\
+        raise_button = \"left\"\nlower_button = \"right\"\nclick_drag_threshold_px = 6.0\n";
 
     /// The `[sim.*]` + `[content.*]` blocks shared by the fixtures — every
     /// subsystem present and on, mana metered (mirrors the shipped
@@ -238,7 +268,7 @@ mod tests {
             name: "default.toml".into(),
             text: format!(
                 "[meta]\nschema_version = {SUPPORTED_SCHEMA_VERSION}\n\n\
-                 {SIM_CONTENT_TOML}\n{RENDER_TOML}"
+                 {SIM_CONTENT_TOML}\n{RENDER_TOML}\n{INPUT_TOML}"
             ),
         }
     }
@@ -438,12 +468,58 @@ mod tests {
     }
 
     #[test]
+    fn default_layer_projects_input_params() {
+        let input = input_params_from_layers(&[default_layer()])
+            .expect("the default layer must yield input params");
+        assert_eq!(input.shape.raise_button, PointerButton::Left);
+        assert_eq!(input.shape.lower_button, PointerButton::Right);
+        assert!(approx(input.shape.click_drag_threshold_px, 6.0));
+    }
+
+    #[test]
+    fn pointer_button_round_trips_each_value() {
+        for (authored, expected) in [
+            ("left", PointerButton::Left),
+            ("right", PointerButton::Right),
+            ("middle", PointerButton::Middle),
+        ] {
+            let overlay = Layer {
+                name: "local.toml".into(),
+                text: format!("[input.shape]\nraise_button = \"{authored}\"\n"),
+            };
+            let input = input_params_from_layers(&[default_layer(), overlay])
+                .expect("each pointer button must parse and map");
+            assert_eq!(input.shape.raise_button, expected);
+        }
+    }
+
+    #[test]
+    fn a_negative_click_drag_threshold_is_rejected() {
+        let overlay = Layer {
+            name: "local.toml".into(),
+            text: "[input.shape]\nclick_drag_threshold_px = -1.0\n".into(),
+        };
+        input_params_from_layers(&[default_layer(), overlay])
+            .expect_err("a negative click/drag threshold must fail garde validation");
+    }
+
+    #[test]
+    fn unknown_pointer_button_is_rejected() {
+        let overlay = Layer {
+            name: "local.toml".into(),
+            text: "[input.shape]\nraise_button = \"scroll\"\n".into(),
+        };
+        input_params_from_layers(&[default_layer(), overlay])
+            .expect_err("an unrecognised pointer button must fail deserialisation");
+    }
+
+    #[test]
     fn schema_version_mismatch_is_a_migration_error() {
         let bad = Layer {
             name: "default.toml".into(),
             text: format!(
                 "[meta]\nschema_version = 999\n\n\
-                 {SIM_CONTENT_TOML}\n{RENDER_TOML}"
+                 {SIM_CONTENT_TOML}\n{RENDER_TOML}\n{INPUT_TOML}"
             ),
         };
         let err = params_from_layers(&[bad]).expect_err("version mismatch must be an error");
