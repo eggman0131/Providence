@@ -5,9 +5,12 @@
 //! - *(none)* — a smoke run proving the config → params → session pipeline,
 //!   plus a textual terrain demo (issue #6 §5).
 //! - `workbench` — open the on-screen 3D terrain workbench (issue #8, ADR 0020):
-//!   a lit height field the Director can look at. Needs a display.
-//! - `capture [PATH]` — render the same scene headlessly to a PNG (ADR 0020 §2),
-//!   the agents-only visual self-check used by `/verify`. No display required.
+//!   a lit height field the Director can orbit / pan / zoom. Needs a display.
+//! - `capture [PATH [YAW PITCH DISTANCE]]` — render the same scene headlessly to
+//!   a PNG (ADR 0020 §2), the agents-only visual self-check used by `/verify`.
+//!   The optional orbit (yaw/pitch degrees, distance) drives the Phase-2 camera
+//!   for the multi-angle self-check; omitted, it uses the configured pose. No
+//!   display required.
 //!
 //! The composition root is the only crate permitted to name concrete adapters
 //! (docs/20-architecture.md §5.2): it projects `render.*` into `RenderParams`,
@@ -21,7 +24,7 @@ use std::process::ExitCode;
 use providence_config::{Params, RenderParams, TerrainParams};
 use providence_core::terrain::{HeightField, raise};
 use providence_ports::{RendererPort, TerrainFrame};
-use providence_renderer::{HeadlessRenderer, NoopRenderer, WindowRenderer};
+use providence_renderer::{HeadlessRenderer, NoopRenderer, OrbitController, WindowRenderer};
 
 /// Fixed demo values for the smoke run — not behavioural config (the smoke
 /// run is dev tooling, not gameplay; real sessions take seed and length
@@ -53,11 +56,51 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None => smoke_run(),
         Some("workbench") => run_workbench(),
-        Some("capture") => run_capture(args.get(1).map(PathBuf::from)),
+        Some("capture") => run_capture(&args[1..]),
         Some(other) => {
-            eprintln!("providence: unknown subcommand `{other}` (try: workbench | capture [PATH])");
+            eprintln!(
+                "providence: unknown subcommand `{other}` \
+                 (try: workbench | capture [PATH [YAW PITCH DISTANCE]])"
+            );
             ExitCode::FAILURE
         }
+    }
+}
+
+/// A parsed `capture` invocation: where to write the PNG and, optionally, an
+/// explicit orbit pose (yaw/pitch degrees, distance) for the Phase-2
+/// multi-angle self-check.
+struct CaptureArgs {
+    path: PathBuf,
+    pose: Option<(f32, f32, f32)>,
+}
+
+/// Parse the `capture` arguments: `[PATH [YAW PITCH DISTANCE]]`. A lone path
+/// keeps the configured pose; all four give an explicit orbit. Any other arity
+/// (e.g. two args) is a usage error rather than a silent misread.
+fn parse_capture_args(args: &[String]) -> Result<CaptureArgs, String> {
+    let parse = |raw: &str, name: &str| {
+        raw.parse::<f32>()
+            .map_err(|_| format!("`{name}` must be a number, got `{raw}`"))
+    };
+    match args {
+        [] => Ok(CaptureArgs {
+            path: PathBuf::from(DEFAULT_CAPTURE_PATH),
+            pose: None,
+        }),
+        [path] => Ok(CaptureArgs {
+            path: PathBuf::from(path),
+            pose: None,
+        }),
+        [path, yaw, pitch, distance] => Ok(CaptureArgs {
+            path: PathBuf::from(path),
+            pose: Some((
+                parse(yaw, "YAW")?,
+                parse(pitch, "PITCH")?,
+                parse(distance, "DISTANCE")?,
+            )),
+        }),
+        _ => Err("usage: capture [PATH [YAW PITCH DISTANCE]]".into()),
     }
 }
 
@@ -116,8 +159,17 @@ fn run_workbench() -> ExitCode {
 }
 
 /// Render the workbench scene headlessly to a PNG (ADR 0020 §2) — the
-/// display-free visual self-check for `/verify`.
-fn run_capture(path: Option<PathBuf>) -> ExitCode {
+/// display-free visual self-check for `/verify`. An optional explicit orbit
+/// pose drives the Phase-2 camera so several angles can be captured and compared
+/// without a display.
+fn run_capture(args: &[String]) -> ExitCode {
+    let capture = match parse_capture_args(args) {
+        Ok(capture) => capture,
+        Err(message) => {
+            eprintln!("providence: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (params, render) = match (load_params(), load_render()) {
         (Ok(params), Ok(render)) => (params, render),
         (Err(code), _) | (_, Err(code)) => return code,
@@ -126,17 +178,30 @@ fn run_capture(path: Option<PathBuf>) -> ExitCode {
     let field = build_workbench_field(&params.sim.terrain);
     let heights = frame_heights(&field);
     let frame = TerrainFrame::new(field.width(), field.height(), &heights);
-    let path = path.unwrap_or_else(|| PathBuf::from(DEFAULT_CAPTURE_PATH));
 
-    let mut renderer = HeadlessRenderer::new(render);
+    let mut renderer = HeadlessRenderer::new(render.clone());
+    // Adapter-local camera override for the multi-angle self-check (ADR 0020
+    // §3): resolve the requested orbit through the same controller the window
+    // uses, so a captured angle matches what the Director would see live.
+    if let Some((yaw, pitch, distance)) = capture.pose {
+        let mut controller = OrbitController::from_params(&render.camera);
+        controller.set_pose(yaw, pitch, distance);
+        renderer.set_view(controller.camera());
+    }
     renderer.present(frame);
-    match renderer.capture(&path) {
+    match renderer.capture(&capture.path) {
         Ok(()) => {
+            let pose = capture.pose.map_or_else(
+                || " (configured pose)".to_string(),
+                |(yaw, pitch, distance)| {
+                    format!(" (yaw {yaw}°, pitch {pitch}°, distance {distance})")
+                },
+            );
             println!(
-                "providence: captured a {}×{} terrain workbench frame to {}",
+                "providence: captured a {}×{} terrain workbench frame to {}{pose}",
                 field.width(),
                 field.height(),
-                path.display()
+                capture.path.display(),
             );
             ExitCode::SUCCESS
         }

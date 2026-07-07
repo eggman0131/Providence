@@ -159,8 +159,9 @@ pub struct RenderParams {
 }
 
 /// `render.camera.*` — the workbench view camera (ADR 0020 §3). The camera is
-/// adapter-local view state; these are only its **initial** pose and its
-/// projection limits (orbit/pan/zoom bounds arrive in issue #8 Phase 2).
+/// adapter-local view state: these are its **initial** pose, its projection
+/// lens, and the bounds/sensitivities of the orbit/pan/zoom controller
+/// (issue #8 Phase 2). The live pose itself never leaves the renderer adapter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraParams {
     /// `render.camera.fov_degrees` — vertical field of view, in degrees.
@@ -175,6 +176,25 @@ pub struct CameraParams {
     pub initial_yaw_degrees: f32,
     /// `render.camera.initial_pitch_degrees` — starting orbit pitch, in degrees.
     pub initial_pitch_degrees: f32,
+    /// `render.camera.min_distance` — closest the zoom may dolly to the target.
+    pub min_distance: f32,
+    /// `render.camera.max_distance` — farthest the zoom may pull back.
+    pub max_distance: f32,
+    /// `render.camera.min_pitch_degrees` — lowest tilt (kept above the horizon
+    /// so the view never dives under the land).
+    pub min_pitch_degrees: f32,
+    /// `render.camera.max_pitch_degrees` — highest tilt (kept below the pole so
+    /// the look-at framing never degenerates).
+    pub max_pitch_degrees: f32,
+    /// `render.camera.orbit_speed` — orbit rotation per pixel of drag, in
+    /// degrees.
+    pub orbit_speed: f32,
+    /// `render.camera.pan_speed` — look-at translation per pixel of drag, in
+    /// world units.
+    pub pan_speed: f32,
+    /// `render.camera.zoom_speed` — fraction of the current distance changed per
+    /// unit of scroll.
+    pub zoom_speed: f32,
 }
 
 /// `render.lighting.*` — a single directional light plus ambient fill, enough

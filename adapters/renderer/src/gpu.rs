@@ -182,9 +182,17 @@ impl TerrainScene {
         }
     }
 
+    /// Replace the view camera (issue #8 Phase 2). The window sets this from
+    /// its [`OrbitController`](crate::camera::OrbitController) each time a drag
+    /// or scroll moves the view; the next [`update`](Self::update) uploads the
+    /// new view/projection matrix.
+    pub fn set_camera(&mut self, camera: Camera) {
+        self.camera = camera;
+    }
+
     /// Recompute and upload the uniforms for a viewport of the given pixel
     /// size. Called on resize and before each draw so the projection tracks the
-    /// surface's aspect ratio.
+    /// surface's aspect ratio (and, in Phase 2, the live camera).
     pub fn update(&self, queue: &wgpu::Queue, width: u32, height: u32) {
         let aspect = aspect_ratio(width, height);
         let uniforms = Uniforms {

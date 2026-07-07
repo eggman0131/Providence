@@ -185,7 +185,9 @@ pub struct RenderSection {
     pub window: WindowSection,
 }
 
-/// `render.camera.*` — the workbench view camera (ADR 0020 §3).
+/// `render.camera.*` — the workbench view camera (ADR 0020 §3). Its initial
+/// pose, projection lens, and the orbit/pan/zoom controller bounds and
+/// sensitivities (issue #8 Phase 2).
 #[derive(Debug, Deserialize, JsonSchema, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CameraSection {
@@ -207,6 +209,32 @@ pub struct CameraSection {
     /// `render.camera.initial_pitch_degrees` — starting orbit pitch, in degrees.
     #[garde(skip)]
     pub initial_pitch_degrees: f32,
+    /// `render.camera.min_distance` — closest the zoom may dolly in. Positive,
+    /// so the eye can never sit on the target.
+    #[garde(range(min = 0.001))]
+    pub min_distance: f32,
+    /// `render.camera.max_distance` — farthest the zoom may pull back. Positive.
+    #[garde(range(min = 0.001))]
+    pub max_distance: f32,
+    /// `render.camera.min_pitch_degrees` — lowest tilt. Held within `(-90, 90)`
+    /// so the look-at framing never degenerates at the pole.
+    #[garde(range(min = -89.0, max = 89.0))]
+    pub min_pitch_degrees: f32,
+    /// `render.camera.max_pitch_degrees` — highest tilt, also within `(-90, 90)`.
+    #[garde(range(min = -89.0, max = 89.0))]
+    pub max_pitch_degrees: f32,
+    /// `render.camera.orbit_speed` — degrees of rotation per pixel of drag.
+    /// Non-negative (0 pins the orbit).
+    #[garde(range(min = 0.0))]
+    pub orbit_speed: f32,
+    /// `render.camera.pan_speed` — world units of look-at translation per pixel
+    /// of drag. Non-negative.
+    #[garde(range(min = 0.0))]
+    pub pan_speed: f32,
+    /// `render.camera.zoom_speed` — fraction of the current distance changed per
+    /// unit of scroll. Non-negative.
+    #[garde(range(min = 0.0))]
+    pub zoom_speed: f32,
 }
 
 /// `render.lighting.*` — one directional light plus ambient fill (ADR 0020).
@@ -317,6 +345,13 @@ impl ConfigRoot {
                 initial_distance: self.render.camera.initial_distance,
                 initial_yaw_degrees: self.render.camera.initial_yaw_degrees,
                 initial_pitch_degrees: self.render.camera.initial_pitch_degrees,
+                min_distance: self.render.camera.min_distance,
+                max_distance: self.render.camera.max_distance,
+                min_pitch_degrees: self.render.camera.min_pitch_degrees,
+                max_pitch_degrees: self.render.camera.max_pitch_degrees,
+                orbit_speed: self.render.camera.orbit_speed,
+                pan_speed: self.render.camera.pan_speed,
+                zoom_speed: self.render.camera.zoom_speed,
             },
             lighting: LightingParams {
                 azimuth_degrees: self.render.lighting.azimuth_degrees,

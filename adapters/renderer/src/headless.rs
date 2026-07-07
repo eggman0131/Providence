@@ -13,6 +13,7 @@ use std::path::Path;
 use providence_config::RenderParams;
 use providence_ports::{RendererPort, TerrainFrame};
 
+use crate::camera::Camera;
 use crate::context::{self, Gpu};
 use crate::error::RendererError;
 use crate::gpu::{self, TerrainScene};
@@ -30,6 +31,7 @@ const BYTES_PER_PIXEL: u32 = 4;
 pub struct HeadlessRenderer {
     params: RenderParams,
     mesh: Option<Mesh>,
+    view: Option<Camera>,
 }
 
 impl HeadlessRenderer {
@@ -37,7 +39,19 @@ impl HeadlessRenderer {
     /// resolution comes from `render.window.{width,height}`.
     #[must_use]
     pub fn new(params: RenderParams) -> Self {
-        Self { params, mesh: None }
+        Self {
+            params,
+            mesh: None,
+            view: None,
+        }
+    }
+
+    /// Override the camera pose for the capture (issue #8 Phase 2). Adapter-local
+    /// view state (ADR 0020 §3): the composition root uses it to render the
+    /// static workbench from a chosen orbit for the multi-angle visual
+    /// self-check. Without it, the capture uses the configured initial pose.
+    pub fn set_view(&mut self, camera: Camera) {
+        self.view = Some(camera);
     }
 
     /// Render the most recently presented frame to a PNG at `path`. Errors if
@@ -70,7 +84,10 @@ impl HeadlessRenderer {
         let color_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = gpu::depth_view(&device, width, height);
 
-        let scene = TerrainScene::new(&device, CAPTURE_FORMAT, &self.params, mesh);
+        let mut scene = TerrainScene::new(&device, CAPTURE_FORMAT, &self.params, mesh);
+        if let Some(view) = self.view {
+            scene.set_camera(view);
+        }
         scene.update(&queue, width, height);
 
         // A texture-to-buffer copy needs each row padded to 256 bytes.

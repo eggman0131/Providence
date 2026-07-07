@@ -2,10 +2,11 @@
 //!
 //! GPU code — not gated (I9). Realises [`RendererPort`] as a real window: it
 //! owns the `winit` event loop (accepting `winit`'s control inversion, ADR 0020
-//! §2) and draws the presented terrain as a lit 3D surface. Phase 1 holds a
-//! **fixed** camera resolved from config; orbit/pan/zoom arrives in Phase 2.
-//! The camera is adapter-local view state and never crosses the boundary
-//! (ADR 0020 §3), so moving the view can never change a height.
+//! §2) and draws the presented terrain as a lit 3D surface. An
+//! [`OrbitController`] turns raw mouse-drag and scroll events into a live
+//! orbit/pan/zoom view (issue #8 Phase 2). The camera is adapter-local view
+//! state and never crosses the boundary (ADR 0020 §3), so moving the view can
+//! never change a height.
 
 use std::sync::Arc;
 
@@ -13,10 +14,11 @@ use providence_config::RenderParams;
 use providence_ports::{RendererPort, TerrainFrame};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+use crate::camera::OrbitController;
 use crate::context::{self, Gpu};
 use crate::error::RendererError;
 use crate::gpu::{self, TerrainScene};
@@ -24,6 +26,12 @@ use crate::mesh::{Mesh, build_mesh};
 
 /// The window title bar text for the workbench.
 const WINDOW_TITLE: &str = "Providence — Terrain Workbench";
+
+/// Trackpad/high-resolution wheels report scroll in pixels; mouse wheels report
+/// it in lines. This normalises a pixel delta to roughly line units so one
+/// `render.camera.zoom_speed` reads sensibly for both devices — input-device
+/// plumbing, not a design tunable (the sensitivity lives in config).
+const PIXEL_SCROLL_TO_LINES: f32 = 0.02;
 
 /// A [`RendererPort`] that opens a window and draws the terrain in 3D.
 ///
@@ -116,13 +124,33 @@ impl ApplicationHandler for WorkbenchApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => state.render(),
+            WindowEvent::MouseInput {
+                state: element_state,
+                button,
+                ..
+            } => state.mouse_button(button, element_state),
+            WindowEvent::CursorMoved { position, .. } => state.cursor_moved(position.x, position.y),
+            WindowEvent::MouseWheel { delta, .. } => state.mouse_wheel(delta),
             _ => {}
         }
     }
 }
 
+/// Which drag gesture is active and where the cursor last was, so a
+/// [`WindowEvent::CursorMoved`] can be turned into an orbit or pan delta.
+#[derive(Default)]
+struct DragState {
+    /// The last cursor position seen, in physical pixels.
+    last_cursor: Option<(f64, f64)>,
+    /// Left button held → orbit on drag.
+    orbiting: bool,
+    /// Right button held → pan on drag.
+    panning: bool,
+}
+
 /// Live GPU state for the open window: surface, device/queue, the prepared
-/// scene, and the depth buffer sized to the surface.
+/// scene, the depth buffer sized to the surface, and the interactive camera
+/// controller with its in-flight drag gesture (issue #8 Phase 2).
 struct WindowState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -131,6 +159,8 @@ struct WindowState {
     config: wgpu::SurfaceConfiguration,
     scene: TerrainScene,
     depth_view: wgpu::TextureView,
+    controller: OrbitController,
+    drag: DragState,
 }
 
 impl WindowState {
@@ -175,7 +205,47 @@ impl WindowState {
             config,
             scene,
             depth_view,
+            controller: OrbitController::from_params(&params.camera),
+            drag: DragState::default(),
         })
+    }
+
+    /// Track a mouse button press/release: left arms orbit, right arms pan.
+    fn mouse_button(&mut self, button: MouseButton, state: ElementState) {
+        let pressed = state == ElementState::Pressed;
+        match button {
+            MouseButton::Left => self.drag.orbiting = pressed,
+            MouseButton::Right => self.drag.panning = pressed,
+            _ => {}
+        }
+    }
+
+    /// Turn cursor motion into an orbit or pan while a button is held, then
+    /// redraw. The very first move after a press seeds `last_cursor` and
+    /// produces no jump.
+    fn cursor_moved(&mut self, x: f64, y: f64) {
+        if let Some((last_x, last_y)) = self.drag.last_cursor {
+            let dx = (x - last_x) as f32;
+            let dy = (y - last_y) as f32;
+            if self.drag.orbiting {
+                self.controller.orbit(dx, dy);
+                self.window.request_redraw();
+            } else if self.drag.panning {
+                self.controller.pan(dx, dy);
+                self.window.request_redraw();
+            }
+        }
+        self.drag.last_cursor = Some((x, y));
+    }
+
+    /// Zoom on scroll (wheel lines or trackpad pixels), then redraw.
+    fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        let amount = match delta {
+            MouseScrollDelta::LineDelta(_, lines) => lines,
+            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * PIXEL_SCROLL_TO_LINES,
+        };
+        self.controller.zoom(amount);
+        self.window.request_redraw();
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -192,6 +262,14 @@ impl WindowState {
 
     fn render(&mut self) {
         use wgpu::CurrentSurfaceTexture;
+
+        // Refresh the uniforms from the live controller so any orbit/pan/zoom
+        // since the last frame shows (issue #8 Phase 2). Cheap: one small
+        // buffer write.
+        self.scene.set_camera(self.controller.camera());
+        self.scene
+            .update(&self.queue, self.config.width, self.config.height);
+
         let surface_texture = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(texture)
             | CurrentSurfaceTexture::Suboptimal(texture) => texture,

@@ -18,9 +18,11 @@
 #![forbid(unsafe_code)]
 // This adapter does floating-point presentation math: small-magnitude integer
 // grid coordinates and heights are cast to `f32` for world-space geometry and
-// colour. Those casts are intentional and effectively lossless here, so the
-// pedantic precision-loss lint carries no signal for this crate.
-#![allow(clippy::cast_precision_loss)]
+// colour, and `winit`'s `f64` cursor/scroll deltas are narrowed to the `f32`
+// the camera controller works in. Those casts are intentional and carry no
+// meaningful loss at these magnitudes, so the pedantic cast lints have no
+// signal for this crate.
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 pub mod camera;
 pub mod color;
@@ -33,6 +35,7 @@ pub mod math;
 pub mod mesh;
 pub mod window;
 
+pub use camera::{Camera, OrbitController};
 pub use error::RendererError;
 pub use headless::HeadlessRenderer;
 pub use window::WindowRenderer;

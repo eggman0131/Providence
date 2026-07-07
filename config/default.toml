@@ -54,14 +54,24 @@ tick_increment = 1
 # RenderParams handed to the renderer adapter, never into the core's Params.
 
 [render.camera]
-# The workbench view camera (ADR 0020 §3). These are its initial pose and
-# projection limits; orbit/pan/zoom bounds arrive in issue #8 Phase 2.
+# The workbench view camera (ADR 0020 §3). Initial pose + projection lens, then
+# the orbit/pan/zoom controller's bounds and sensitivities (issue #8 Phase 2).
+# The live pose is adapter-local view state and never crosses the boundary.
 fov_degrees = 45.0        # vertical field of view, degrees
 near = 0.1                # near clip-plane distance
 far = 1000.0              # far clip-plane distance
 initial_distance = 24.0   # starting orbit distance from the target
 initial_yaw_degrees = 45.0
 initial_pitch_degrees = 30.0
+# Orbit/pan/zoom limits — the camera stays inside this envelope (Phase 2).
+min_distance = 6.0        # closest the zoom may dolly in (> 0)
+max_distance = 120.0      # farthest the zoom may pull back
+min_pitch_degrees = 5.0   # lowest tilt, kept above the horizon
+max_pitch_degrees = 85.0  # highest tilt, kept below the pole
+# Drag/scroll sensitivities.
+orbit_speed = 0.4         # degrees of rotation per pixel of drag
+pan_speed = 0.05          # world units of pan per pixel of drag
+zoom_speed = 0.1          # fraction of distance changed per scroll unit
 
 [render.lighting]
 # One directional light plus ambient fill, enough to read the flat-shaded

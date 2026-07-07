@@ -198,7 +198,10 @@ mod tests {
     const RENDER_TOML: &str = "\
         [render.camera]\n\
         fov_degrees = 45.0\nnear = 0.1\nfar = 1000.0\n\
-        initial_distance = 24.0\ninitial_yaw_degrees = 45.0\ninitial_pitch_degrees = 30.0\n\n\
+        initial_distance = 24.0\ninitial_yaw_degrees = 45.0\ninitial_pitch_degrees = 30.0\n\
+        min_distance = 6.0\nmax_distance = 120.0\n\
+        min_pitch_degrees = 5.0\nmax_pitch_degrees = 85.0\n\
+        orbit_speed = 0.4\npan_speed = 0.05\nzoom_speed = 0.1\n\n\
         [render.lighting]\n\
         azimuth_degrees = 135.0\nelevation_degrees = 45.0\nambient = 0.25\ndiffuse = 0.85\n\n\
         [render.palette]\n\
