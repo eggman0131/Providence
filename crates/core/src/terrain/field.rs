@@ -12,6 +12,7 @@
 //! the state and this predicate; the shaping operations that must preserve it
 //! (raise/lower with a bounded cascade) live in [`super::shape`].
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 /// A vertex's integer height. Signed so terrain can sit below the sea datum;
@@ -94,8 +95,10 @@ impl HeightField {
     /// `None` if the coordinate is out of bounds.
     ///
     /// Crate-internal: the shaping operations in [`super::shape`] are the only
-    /// writers, so every mutation runs through the step-invariant-preserving
-    /// cascade rather than poking cells directly.
+    /// callers, so every interactive mutation runs through the
+    /// step-invariant-preserving cascade rather than poking cells directly.
+    /// (Worldgen's [`conform_to_step_invariant`](Self::conform_to_step_invariant)
+    /// also lowers cells, but it restores the invariant as it goes.)
     pub(crate) fn set(&mut self, x: u32, y: u32, value: Height) -> Option<Height> {
         if x < self.width && y < self.height {
             let index = self.index(x, y);
@@ -140,6 +143,46 @@ impl HeightField {
             }
         }
         true
+    }
+
+    /// Lower vertices in place until the field satisfies the step invariant for
+    /// `max_step`, yielding the unique **maximal** field `≤` the original that
+    /// is `max_step`-Lipschitz (ADR 0021 §3). Worldgen calls this so the field
+    /// it hands back already satisfies the invariant — nothing downstream has to
+    /// repair it.
+    ///
+    /// This is the multi-source generalisation of [`super::shape::lower`]'s
+    /// cascade: seed a worklist with every vertex, and whenever a vertex sits
+    /// more than `max_step` above an orthogonal neighbour, pull that neighbour
+    /// down to the boundary and re-enqueue it. Only lowering happens and heights
+    /// are integers bounded below by the field minimum, so it terminates; the
+    /// result is the order-independent infimal convolution, hence deterministic
+    /// (I3). Chosen over raising because it respects the physical constraint —
+    /// a peak a short run from the coast *cannot* be tall at unit step — rather
+    /// than filling the sea to reach it.
+    pub(crate) fn conform_to_step_invariant(&mut self, max_step: u32) {
+        let mut frontier: VecDeque<(u32, u32)> = VecDeque::new();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                frontier.push_back((x, y));
+            }
+        }
+        while let Some((x, y)) = frontier.pop_front() {
+            let here = self.cells[self.index(x, y)];
+            // The most a neighbour may exceed `here` and still be within a step.
+            let ceiling = here.saturating_add_unsigned(max_step);
+            let left = x.checked_sub(1).map(|nx| (nx, y));
+            let right = (x + 1 < self.width).then_some((x + 1, y));
+            let up = y.checked_sub(1).map(|ny| (x, ny));
+            let down = (y + 1 < self.height).then_some((x, y + 1));
+            for (nx, ny) in [left, right, up, down].into_iter().flatten() {
+                let index = self.index(nx, ny);
+                if self.cells[index] > ceiling {
+                    self.cells[index] = ceiling;
+                    frontier.push_back((nx, ny));
+                }
+            }
+        }
     }
 }
 

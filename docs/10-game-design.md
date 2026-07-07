@@ -16,10 +16,10 @@ You are a young deity contesting a world with a rival deity (the LLM opponent). 
 
 ## 2. The world
 
-- The world is an **integer height field sampled at grid vertices** (corners) — height lives on the *vertex*, and the land you see is the surface spanning them. A **face** (the square between four vertices) is what followers build on. Terrain *type* (land, water, derived shore/mountain) is derived from height and sea level; the type catalogue is `content.terrain.*`. Map dimensions and generation come from `sim.worldgen.*`. See [ADR 0017](./decisions/0017-vertex-heightfield-terrain.md).
+- The world is an **integer height field sampled at grid vertices** (corners) — height lives on the *vertex*, and the land you see is the surface spanning them. A **face** (the square between four vertices) is what followers build on. Terrain *type* (water / shore / land / mountain) is derived from height and sea level; the thresholds that name shore and mountain are the type catalogue `content.terrain.*` (`shore.band`, `mountain.min_height`). See [ADR 0017](./decisions/0017-vertex-heightfield-terrain.md).
 - **Step invariant:** orthogonally-adjacent vertices differ in height by at most `sim.terrain.max_step` (default 1) — so terrain is *stepped*, never a sheer cliff, and heights are integers (a determinism aid, I3). Diagonal neighbours may differ by up to twice that.
-- Sea level, initial land ratio, and starting settlement placement: `sim.worldgen.*`. (The generated world already satisfies the step invariant.)
-- The world is generated from a **seed** (I3); the same seed reproduces the same world.
+- **Worldgen** ([ADR 0021](./decisions/0021-seeded-parameterised-worldgen.md)) is a **pure, seeded function** that builds the height field: `sim.worldgen.*` carries the map `width`/`height`, `seed`, `sea_level`, `land_percent`, a **`shape`** (`island` / `continent` / `archipelago` / `inland`), and the **relief** controls (`relief`/`feature_size`/`detail`). It is *never one baked-in world* — the knobs span a shape × relief space, the seed varies the instance within it. The out-of-box world is an **island ringed by sea with mixed relief**. The field worldgen hands back already satisfies the step invariant. *Starting settlement placement* is design intent under `sim.worldgen.*` but stays parked (it sits above terrain).
+- The world is generated from a **seed** (I3); the same seed + knobs reproduces the same world, forever.
 
 ## 3. Core verb — land shaping
 

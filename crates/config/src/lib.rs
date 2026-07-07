@@ -18,6 +18,11 @@
 pub struct Params {
     /// `sim.*` — deterministic-simulation parameters.
     pub sim: SimParams,
+    /// `content.*` — content **definitions** the core reads as data
+    /// (docs/40-parameterisation.md §2.2): the terrain type catalogue today,
+    /// the powers/followers/scenarios catalogues later. Deterministic — inside
+    /// the boundary — but organised as content, not tuning.
+    pub content: ContentParams,
 }
 
 /// `sim.*` — parameters governing the deterministic core.
@@ -29,6 +34,10 @@ pub struct Params {
 /// subsystem reads its *own* state, never another's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimParams {
+    /// `sim.worldgen.*` — the seeded world generator (ADR 0021). Like
+    /// `sim.terrain.*`, an always-on foundation: it produces the substrate the
+    /// whole game stands on, so it carries no `enabled` seam (ADR 0016).
+    pub worldgen: WorldgenParams,
     /// `sim.opponent.*` — the rival deity subsystem. Disable it and the loop
     /// still runs; nothing casts against the player (ADR 0016 §3).
     pub opponent: OpponentParams,
@@ -123,6 +132,69 @@ pub struct RaiseParams {
     pub mana_cost: u32,
 }
 
+/// `sim.worldgen.*` — the seeded, parameterised world generator (ADR 0021).
+///
+/// Worldgen is a **pure function of `seed`** producing an integer height field
+/// that already satisfies the terrain step invariant (ADR 0017). Its knobs span
+/// a *shape × relief* space — never a single baked-in world — so the same code
+/// yields an island, a coastline, an archipelago, or a lake-dotted interior
+/// (the Director's steer, ADR 0021 §2). All fields are **structural /
+/// load-time** (docs/40-parameterisation.md §4) and integer-valued, keeping the
+/// core float-free and reproducible (I3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorldgenParams {
+    /// `sim.worldgen.width` — map width in vertices (east–west extent).
+    pub width: u32,
+    /// `sim.worldgen.height` — map height in vertices (north–south extent).
+    /// The grid's *depth*, not an elevation (heights live in the field).
+    pub height: u32,
+    /// `sim.worldgen.seed` — the `u64` the generator draws from. Same seed +
+    /// same knobs ⇒ the same world, forever (ADR 0021 §1).
+    pub seed: u64,
+    /// `sim.worldgen.sea_level` — the waterline datum: vertices at or below it
+    /// are water, above it are land (ADR 0017 §1). A signed height, so the sea
+    /// can sit at, above, or below zero.
+    pub sea_level: i32,
+    /// `sim.worldgen.land_percent` — target percentage of the map above sea
+    /// level. The generator picks the elevation threshold that lands *about*
+    /// this fraction dry; the conform pass may shift it slightly (ADR 0021 §3).
+    /// The ADR's `land_ratio`, expressed as an integer percent so the core
+    /// stays integer-exact (I3).
+    pub land_percent: u32,
+    /// `sim.worldgen.shape` — how land is arranged (ADR 0021 §2, sub-choice a):
+    /// a named mode, not a blend scalar.
+    pub shape: Shape,
+    /// `sim.worldgen.relief` — the vertical drama: the maximum number of height
+    /// steps land rises above sea level (and water falls below it). Small is
+    /// gentle, large is dramatic; the step invariant still caps what a given
+    /// map size can actually express (ADR 0021 §3).
+    pub relief: i32,
+    /// `sim.worldgen.feature_size` — the base noise wavelength in vertices: how
+    /// broad the primary hills and bays are. Larger is smoother/broader.
+    pub feature_size: u32,
+    /// `sim.worldgen.detail` — how many noise octaves are summed. More octaves
+    /// add finer texture atop the base features (ADR 0021 §3).
+    pub detail: u32,
+}
+
+/// `sim.worldgen.shape` — the named land-arrangement modes (ADR 0021 §2a). Each
+/// selects a distinct generator mask; the seed varies the instance *within* the
+/// chosen flavour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// One landmass ringed by sea — the classic inspiration and the shipped
+    /// default. A radial falloff pulls the coast inward on every side.
+    Island,
+    /// Land fills most of the map but recedes from the edges, guaranteeing a
+    /// coastline without isolating the land.
+    Continent,
+    /// Several scattered islands — a coarse mask breaks the land into clusters.
+    Archipelago,
+    /// Mostly land with interior lakes — the mask stays full and only the
+    /// lowest ground dips below the waterline.
+    Inland,
+}
+
 /// `sim.placeholder.*` — placeholder parameters proving the config → core
 /// wiring end-to-end (contract §7.2). Deleted when the Phase-3 core consumes
 /// real subsystem state (prefer deletion, contract §4.1).
@@ -131,6 +203,46 @@ pub struct PlaceholderParams {
     /// `sim.placeholder.tick_increment` — ticks the placeholder state
     /// advances per step.
     pub tick_increment: u64,
+}
+
+/// `content.*` — content **definitions** consumed by the core as data
+/// (docs/40-parameterisation.md §2.2, §3). The first `content.*` table to land
+/// (ADR 0021): the terrain type catalogue. Powers, followers, and scenarios
+/// join it as their subsystems unpark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentParams {
+    /// `content.terrain.*` — the terrain type catalogue: the thresholds that
+    /// name *shore* and *mountain* over the height field (ADR 0017 §1).
+    pub terrain: TerrainContent,
+}
+
+/// `content.terrain.*` — the terrain type catalogue (ADR 0017 §1, ADR 0021 §4).
+///
+/// These thresholds turn a bare height into a named [terrain type](../../crates/core/src/terrain/derive.rs):
+/// they are **content**, not simulation tuning — what "shore" and "mountain"
+/// *mean* over the field the generator produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerrainContent {
+    /// `content.terrain.shore.*` — the coastal band just above the waterline.
+    pub shore: ShoreContent,
+    /// `content.terrain.mountain.*` — the high-ground band.
+    pub mountain: MountainContent,
+}
+
+/// `content.terrain.shore.*` — the shore band (ADR 0017 §1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShoreContent {
+    /// `content.terrain.shore.band` — how many height steps above sea level
+    /// still count as shore rather than ordinary land. `0` means no shore band.
+    pub band: u32,
+}
+
+/// `content.terrain.mountain.*` — the mountain band (ADR 0017 §1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountainContent {
+    /// `content.terrain.mountain.min_height` — the height at or above which a
+    /// vertex is mountain, taking precedence over the shore band.
+    pub min_height: i32,
 }
 
 /// `render.*` — presentation parameters for the workbench renderer (ADR 0020

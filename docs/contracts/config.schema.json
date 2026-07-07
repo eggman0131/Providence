@@ -4,6 +4,58 @@
   "description": "Root of the authored configuration (all layers merged).",
   "type": "object",
   "properties": {
+    "content": {
+      "description": "`content.*` — content definitions the core reads as data\n(docs/40-parameterisation.md §2.2, §3): the terrain type catalogue today.",
+      "type": "object",
+      "properties": {
+        "terrain": {
+          "description": "`content.terrain.*` — the terrain type catalogue.",
+          "type": "object",
+          "properties": {
+            "mountain": {
+              "description": "`content.terrain.mountain.*` — the high-ground band.",
+              "type": "object",
+              "properties": {
+                "min_height": {
+                  "description": "`content.terrain.mountain.min_height` — height at or above which a\nvertex is mountain. Any value.",
+                  "type": "integer",
+                  "format": "int32"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "min_height"
+              ]
+            },
+            "shore": {
+              "description": "`content.terrain.shore.*` — the coastal band.",
+              "type": "object",
+              "properties": {
+                "band": {
+                  "description": "`content.terrain.shore.band` — height steps above sea level still\ncounted as shore. Any value (0 = no shore band).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "band"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "shore",
+            "mountain"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terrain"
+      ]
+    },
     "meta": {
       "description": "`meta.*` — config/schema versioning and provenance.",
       "type": "object",
@@ -412,10 +464,106 @@
           "required": [
             "enabled"
           ]
+        },
+        "worldgen": {
+          "description": "`sim.worldgen.*` — the seeded world generator (ADR 0021).",
+          "type": "object",
+          "properties": {
+            "detail": {
+              "description": "`sim.worldgen.detail` — number of noise octaves. Bounded to a small\nrange: past a handful, octaves fall below the fixed-point floor.",
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 8,
+              "minimum": 1
+            },
+            "feature_size": {
+              "description": "`sim.worldgen.feature_size` — base noise wavelength in vertices. Bounded\naway from 0 (a wavelength must be positive) and capped so the coarse\nmasks stay in range.",
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 1024,
+              "minimum": 1
+            },
+            "height": {
+              "description": "`sim.worldgen.height` — map height (depth) in vertices.",
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 1024,
+              "minimum": 2
+            },
+            "land_percent": {
+              "description": "`sim.worldgen.land_percent` — target percentage of the map above sea\nlevel. Held inside `(0, 100)` so neither an all-sea nor all-land world\nis asked for.",
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 99,
+              "minimum": 1
+            },
+            "relief": {
+              "description": "`sim.worldgen.relief` — the vertical drama: max height steps land rises\nabove sea level. At least 1 (a flat, all-shore world).",
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            },
+            "sea_level": {
+              "description": "`sim.worldgen.sea_level` — the waterline datum. Signed; any value.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "seed": {
+              "description": "`sim.worldgen.seed` — the `u64` the generator draws from. Any value is\nvalid; it names the specific world within the chosen flavour.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "shape": {
+              "description": "`sim.worldgen.shape` — the land-arrangement mode (ADR 0021 §2a).",
+              "oneOf": [
+                {
+                  "description": "One landmass ringed by sea (the shipped default).",
+                  "type": "string",
+                  "const": "island"
+                },
+                {
+                  "description": "Land filling most of the map, receding to a coastline at the edges.",
+                  "type": "string",
+                  "const": "continent"
+                },
+                {
+                  "description": "Several scattered islands.",
+                  "type": "string",
+                  "const": "archipelago"
+                },
+                {
+                  "description": "Mostly land with interior lakes.",
+                  "type": "string",
+                  "const": "inland"
+                }
+              ]
+            },
+            "width": {
+              "description": "`sim.worldgen.width` — map width in vertices. Bounded so a world is\nlarge enough to read and small enough to generate cheaply.",
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 1024,
+              "minimum": 2
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "height",
+            "seed",
+            "sea_level",
+            "land_percent",
+            "shape",
+            "relief",
+            "feature_size",
+            "detail"
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
+        "worldgen",
         "opponent",
         "economy",
         "winloss",
@@ -428,6 +576,7 @@
   "required": [
     "meta",
     "sim",
+    "content",
     "render"
   ]
 }

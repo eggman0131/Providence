@@ -11,13 +11,15 @@
 //!
 //! Issue #7 builds worldgen on top ([ADR 0021](../../../docs/decisions/0021-seeded-parameterised-worldgen.md)):
 //! Phase 1 derives terrain *type* and *buildability* from height and sea level
-//! ([`derive`]); Phase 2 adds the seeded, parameterised generator; Phase 3
-//! realises the immovable-feature seam (ADR 0017 §5).
+//! ([`derive`]); Phase 2 adds the seeded, parameterised generator
+//! ([`worldgen`]); Phase 3 realises the immovable-feature seam (ADR 0017 §5).
 
 mod derive;
 mod field;
 mod shape;
+mod worldgen;
 
 pub use derive::{TerrainType, classify_vertex, is_buildable_face};
 pub use field::{Height, HeightField};
 pub use shape::{ShapeOutcome, lower, raise};
+pub use worldgen::generate;

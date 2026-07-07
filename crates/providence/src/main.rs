@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use providence_config::{Params, RenderParams, TerrainParams};
-use providence_core::terrain::{HeightField, raise};
+use providence_core::terrain::{HeightField, TerrainType, classify_vertex, generate, raise};
 use providence_ports::{RendererPort, TerrainFrame};
 use providence_renderer::{HeadlessRenderer, NoopRenderer, OrbitController, WindowRenderer};
 
@@ -41,13 +41,6 @@ const DEMO_RAISES: u32 = 3;
 /// demo stay within its length; taller vertices reuse the last glyph.
 const HEIGHT_GLYPHS: &[u8] = b".:-=+*#%@";
 
-/// Workbench scene (dev tooling): a larger field with a few overlapping hills so
-/// the flat-shaded steps, height colouring, and lighting are all visible when
-/// the land is seen in 3D.
-const WORKBENCH_SIZE: u32 = 32;
-/// Hills as `(x, y, raises)` — a tall central peak plus two smaller offset
-/// rises, giving asymmetric relief to judge (issue #8; ADR 0019 "seen and felt").
-const WORKBENCH_HILLS: &[(u32, u32, u32)] = &[(16, 16, 9), (8, 22, 5), (24, 9, 6)];
 /// Default output path for a `capture` with no explicit path argument.
 const DEFAULT_CAPTURE_PATH: &str = "target/workbench.png";
 
@@ -142,7 +135,8 @@ fn run_workbench() -> ExitCode {
         (Err(code), _) | (_, Err(code)) => return code,
     };
 
-    let field = build_workbench_field(&params.sim.terrain);
+    let field = generate_world(&params);
+    print_terrain_census(&field, &params);
     let heights = frame_heights(&field);
     let frame = TerrainFrame::new(field.width(), field.height(), &heights);
 
@@ -175,7 +169,8 @@ fn run_capture(args: &[String]) -> ExitCode {
         (Err(code), _) | (_, Err(code)) => return code,
     };
 
-    let field = build_workbench_field(&params.sim.terrain);
+    let field = generate_world(&params);
+    print_terrain_census(&field, &params);
     let heights = frame_heights(&field);
     let frame = TerrainFrame::new(field.width(), field.height(), &heights);
 
@@ -229,16 +224,56 @@ fn load_render() -> Result<RenderParams, ExitCode> {
     })
 }
 
-/// Build the richer workbench field: raise each configured hill in turn on a
-/// flat field, letting the core's cascade shape the stepped relief.
-fn build_workbench_field(terrain: &TerrainParams) -> HeightField {
-    let mut field = HeightField::flat(WORKBENCH_SIZE, WORKBENCH_SIZE, 0);
-    for &(x, y, raises) in WORKBENCH_HILLS {
-        for _ in 0..raises {
-            raise(&mut field, x, y, terrain);
+/// Generate the workbench world from the seeded worldgen config (ADR 0021):
+/// the real terrain #11 judges, replacing the hand-built demo bump. The field
+/// already satisfies the step invariant; `max_step` is the invariant it must
+/// honour.
+fn generate_world(params: &Params) -> HeightField {
+    generate(&params.sim.worldgen, params.sim.terrain.max_step)
+}
+
+/// Print a terrain-type census of a generated world — the honest, textual
+/// "verified" observation (contract §3): how the seed's heights classify into
+/// water / shore / land / mountain (ADR 0017 §1), reading the `content.terrain.*`
+/// thresholds. Proves worldgen + the derivations are wired end-to-end before the
+/// 3D view even opens.
+fn print_terrain_census(field: &HeightField, params: &Params) {
+    let worldgen = &params.sim.worldgen;
+    let terrain = &params.content.terrain;
+    let (mut water, mut shore, mut land, mut mountain) = (0_u32, 0_u32, 0_u32, 0_u32);
+    let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
+    for y in 0..field.height() {
+        for x in 0..field.width() {
+            let height = field.get(x, y).unwrap_or(worldgen.sea_level);
+            lowest = lowest.min(height);
+            highest = highest.max(height);
+            match classify_vertex(
+                height,
+                worldgen.sea_level,
+                terrain.shore.band,
+                terrain.mountain.min_height,
+            ) {
+                TerrainType::Water => water += 1,
+                TerrainType::Shore => shore += 1,
+                TerrainType::Land => land += 1,
+                TerrainType::Mountain => mountain += 1,
+            }
         }
     }
-    field
+    let total = field.width() * field.height();
+    let dry = shore + land + mountain;
+    println!(
+        "providence: generated a {w}×{h} {shape:?} world (seed {seed}) — \
+         {dry}/{total} vertices dry ({percent}%): \
+         water {water}, shore {shore}, land {land}, mountain {mountain}; \
+         heights {lowest}..={highest}, invariant held = {ok}",
+        w = field.width(),
+        h = field.height(),
+        shape = worldgen.shape,
+        seed = worldgen.seed,
+        percent = dry * 100 / total.max(1),
+        ok = field.satisfies_step_invariant(params.sim.terrain.max_step),
+    );
 }
 
 /// Flatten a height field into the row-major buffer a [`TerrainFrame`] borrows.
