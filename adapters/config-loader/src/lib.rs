@@ -188,7 +188,7 @@ fn read_layers(dir: &Path, profile: Option<&str>) -> Result<Vec<Layer>, ConfigEr
 
 #[cfg(test)]
 mod tests {
-    use providence_config::ManaMode;
+    use providence_config::{ManaMode, Shape};
 
     use super::{Layer, SUPPORTED_SCHEMA_VERSION, params_from_layers, render_params_from_layers};
 
@@ -212,6 +212,25 @@ mod tests {
         [render.window]\nwidth = 1280\nheight = 720\n\n\
         [render.hud]\nenabled = true\nshow_camera = true\nshow_reticle = true\n";
 
+    /// The `[sim.*]` + `[content.*]` blocks shared by the fixtures — every
+    /// subsystem present and on, mana metered (mirrors the shipped
+    /// `config/default.toml`). Kept as one const so both the default layer and
+    /// the version-mismatch fixture stay complete as the schema grows.
+    const SIM_CONTENT_TOML: &str = "\
+        [sim.worldgen]\n\
+        width = 64\nheight = 64\nseed = 1337\nsea_level = 0\nland_percent = 55\n\
+        shape = \"island\"\nrelief = 12\nfeature_size = 16\ndetail = 3\n\n\
+        [sim.opponent]\nenabled = true\n\n\
+        [sim.economy.mana]\nmode = \"normal\"\n\n\
+        [sim.winloss]\nenabled = true\n\n\
+        [sim.terrain]\nmax_step = 1\nmax_height = 64\n\n\
+        [sim.terrain.raise]\nmana_cost = 1\n\n\
+        [sim.placeholder]\ntick_increment = 1\n\n\
+        [content.terrain.shore]\nband = 2\n\n\
+        [content.terrain.mountain]\nmin_height = 12\n\n\
+        [content.terrain.tree]\ndensity_permille = 120\n\n\
+        [content.terrain.rock]\ndensity_permille = 200\n";
+
     /// A complete governed default layer: every subsystem present and on,
     /// mana metered (mirrors the shipped `config/default.toml`).
     fn default_layer() -> Layer {
@@ -219,13 +238,7 @@ mod tests {
             name: "default.toml".into(),
             text: format!(
                 "[meta]\nschema_version = {SUPPORTED_SCHEMA_VERSION}\n\n\
-                 [sim.opponent]\nenabled = true\n\n\
-                 [sim.economy.mana]\nmode = \"normal\"\n\n\
-                 [sim.winloss]\nenabled = true\n\n\
-                 [sim.terrain]\nmax_step = 1\nmax_height = 64\n\n\
-                 [sim.terrain.raise]\nmana_cost = 1\n\n\
-                 [sim.placeholder]\ntick_increment = 1\n\n\
-                 {RENDER_TOML}"
+                 {SIM_CONTENT_TOML}\n{RENDER_TOML}"
             ),
         }
     }
@@ -248,6 +261,43 @@ mod tests {
         assert!(params.sim.opponent.enabled);
         assert_eq!(params.sim.economy.mana.mode, ManaMode::Normal);
         assert!(params.sim.winloss.enabled);
+        // Worldgen + the first content table project through (ADR 0021).
+        assert_eq!(
+            (params.sim.worldgen.width, params.sim.worldgen.height),
+            (64, 64)
+        );
+        assert_eq!(params.sim.worldgen.shape, Shape::Island);
+        assert_eq!(params.sim.worldgen.land_percent, 55);
+        assert_eq!(params.content.terrain.shore.band, 2);
+        assert_eq!(params.content.terrain.mountain.min_height, 12);
+    }
+
+    #[test]
+    fn shape_round_trips_each_value() {
+        for (authored, expected) in [
+            ("island", Shape::Island),
+            ("continent", Shape::Continent),
+            ("archipelago", Shape::Archipelago),
+            ("inland", Shape::Inland),
+        ] {
+            let overlay = Layer {
+                name: "local.toml".into(),
+                text: format!("[sim.worldgen]\nshape = \"{authored}\"\n"),
+            };
+            let params = params_from_layers(&[default_layer(), overlay])
+                .expect("each shape must parse and map");
+            assert_eq!(params.sim.worldgen.shape, expected);
+        }
+    }
+
+    #[test]
+    fn out_of_range_land_percent_is_rejected() {
+        let overlay = Layer {
+            name: "local.toml".into(),
+            text: "[sim.worldgen]\nland_percent = 100\n".into(),
+        };
+        params_from_layers(&[default_layer(), overlay])
+            .expect_err("land_percent at 100 must fail garde validation (max 99)");
     }
 
     #[test]
@@ -393,13 +443,7 @@ mod tests {
             name: "default.toml".into(),
             text: format!(
                 "[meta]\nschema_version = 999\n\n\
-                 [sim.opponent]\nenabled = true\n\n\
-                 [sim.economy.mana]\nmode = \"normal\"\n\n\
-                 [sim.winloss]\nenabled = true\n\n\
-                 [sim.terrain]\nmax_step = 1\nmax_height = 64\n\n\
-                 [sim.terrain.raise]\nmana_cost = 1\n\n\
-                 [sim.placeholder]\ntick_increment = 1\n\n\
-                 {RENDER_TOML}"
+                 {SIM_CONTENT_TOML}\n{RENDER_TOML}"
             ),
         };
         let err = params_from_layers(&[bad]).expect_err("version mismatch must be an error");

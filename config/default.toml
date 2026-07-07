@@ -15,6 +15,23 @@ schema_version = 1
 # covers this configuration; the sandbox profile (config/sandbox.toml) sits
 # OUTSIDE that contract (ADR 0016 §4).
 
+# Worldgen: the seeded, parameterised world generator (ADR 0021). A pure
+# function of `seed` producing an integer height field that already satisfies
+# the terrain step invariant. Like terrain, an always-on foundation — no
+# `enabled` seam. All keys are structural/load-time. The shipped world is the
+# classic inspiration: an island ringed by sea, with mixed relief (rolling
+# flats plus distinct high ground) that shows the stepped land off (#11).
+[sim.worldgen]
+width = 64            # map width in vertices (east-west extent)
+height = 64           # map height/depth in vertices (north-south extent)
+seed = 1337           # the u64 the generator draws from; names this world
+sea_level = 0         # waterline datum: <= is water, > is land
+land_percent = 55     # target % of the map above sea level (the ADR's land_ratio)
+shape = "island"      # "island" | "continent" | "archipelago" | "inland" (ADR 0021 §2a)
+relief = 12           # max height steps land rises above sea level (vertical drama)
+feature_size = 16     # base noise wavelength in vertices (how broad the hills are)
+detail = 3            # noise octaves summed atop the base features
+
 [sim.opponent]
 # false => no rival deity; the loop runs but nothing casts against the player.
 enabled = true
@@ -48,6 +65,32 @@ mana_cost = 1
 # end-to-end. Deleted when the Phase-3 core consumes real subsystem state.
 tick_increment = 1
 
+# --- Content definitions (docs/40-parameterisation.md §2.2, §3) ---
+# content.* is data the core reads, not tuning. The first content table
+# (ADR 0021): the terrain type catalogue — the thresholds that name "shore" and
+# "mountain" over the height field the generator produces (ADR 0017 §1).
+
+[content.terrain.shore]
+# Height steps above sea level still counted as shore rather than ordinary land
+# (0 = no shore band). The coastal fringe just above the waterline.
+band = 2
+
+[content.terrain.mountain]
+# Height at or above which a vertex is mountain (takes precedence over shore).
+# With sea_level 0 and relief 12, the top few steps of the central massif read
+# as mountain rather than ordinary land.
+min_height = 9
+
+# Terrain-owned immovables (ADR 0017 §5, ADR 0021 §5): worldgen scatters these
+# deterministically, and a raise/lower whose cascade would disturb one is
+# refused (no silent destruction). density_permille = features per 1000 eligible
+# vertices (trees on land, rock on mountains).
+[content.terrain.tree]
+density_permille = 120   # trees per 1000 land vertices
+
+[content.terrain.rock]
+density_permille = 200   # rock per 1000 mountain vertices
+
 # --- Presentation (docs/40-parameterisation.md §2.2, ADR 0020) ---
 # render.* is the workbench renderer's config. It is NON-deterministic and sits
 # OUTSIDE the determinism boundary: the loader projects it into a standalone
@@ -60,9 +103,9 @@ tick_increment = 1
 fov_degrees = 45.0        # vertical field of view, degrees
 near = 0.1                # near clip-plane distance
 far = 1000.0              # far clip-plane distance
-initial_distance = 24.0   # starting orbit distance from the target
+initial_distance = 92.0   # starting orbit distance — frames the whole 64-wide island
 initial_yaw_degrees = 45.0
-initial_pitch_degrees = 30.0
+initial_pitch_degrees = 38.0
 # Orbit/pan/zoom limits — the camera stays inside this envelope (Phase 2).
 min_distance = 6.0        # closest the zoom may dolly in (> 0)
 max_distance = 120.0      # farthest the zoom may pull back
@@ -83,9 +126,13 @@ diffuse = 0.85            # diffuse fraction, [0, 1]
 
 [render.palette]
 # Vertex height -> colour, lerped from low (lowest drawn height) to high
-# (highest), linear RGB.
-low_rgb = [0.24, 0.36, 0.16]
-high_rgb = [0.86, 0.86, 0.82]
+# (highest), linear RGB. With the seeded island (ADR 0021) the lowest height is
+# the flat sea at the datum, so `low` doubles as the sea colour: a shallow teal
+# that ramps up through green lowland to pale high ground. (The renderer shades
+# purely by height and has no true waterline yet — a distinct water band is a
+# renderer follow-up; until then this two-stop ramp reads the sea as water.)
+low_rgb = [0.16, 0.34, 0.44]
+high_rgb = [0.88, 0.87, 0.80]
 
 [render.background]
 # Clear colour the world is drawn against, linear RGB.

@@ -8,16 +8,19 @@
 //! shaping** model (issue #6 Phase 3, ADR 0017 §3): a fixed raise/lower
 //! sequence over a 16×16 field fingerprints to [`GOLDEN_TERRAIN`], guarding the
 //! cascade and cost model against silent drift the same way `GOLDEN` guards the
-//! step loop.
+//! step loop. It further pins **worldgen** (issue #7 Phase 2, ADR 0021): a
+//! fixed seed + params fingerprints to [`GOLDEN_WORLDGEN`], so "same seed ⇒ same
+//! world" (I3) is guarded against silent generator drift.
 
 use providence_config::{
-    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, RaiseParams,
-    SimParams, TerrainParams, WinLossParams,
+    ContentParams, EconomyParams, ManaMode, ManaParams, MountainContent, OpponentParams, Params,
+    PlaceholderParams, RaiseParams, RockContent, Shape, ShoreContent, SimParams, TerrainContent,
+    TerrainParams, TreeContent, WinLossParams, WorldgenParams,
 };
 use providence_core::hash::Fnv1a64;
 use providence_core::rng::SplitMix64;
 use providence_core::state::{State, step};
-use providence_core::terrain::{HeightField, lower, raise};
+use providence_core::terrain::{Feature, HeightField, generate, lower, place_features, raise};
 
 const SEED: u64 = 0xD1CE;
 const STEPS: u64 = 1_000;
@@ -30,6 +33,7 @@ const GOLDEN: u64 = 0x804F_981D_B5F9_5BC5;
 fn fixture_params() -> Params {
     Params {
         sim: SimParams {
+            worldgen: worldgen_fixture(),
             opponent: OpponentParams { enabled: true },
             economy: EconomyParams {
                 mana: ManaParams {
@@ -43,6 +47,18 @@ fn fixture_params() -> Params {
                 raise: RaiseParams { mana_cost: 1 },
             },
             placeholder: PlaceholderParams { tick_increment: 1 },
+        },
+        content: ContentParams {
+            terrain: TerrainContent {
+                shore: ShoreContent { band: 2 },
+                mountain: MountainContent { min_height: 12 },
+                tree: TreeContent {
+                    density_permille: 120,
+                },
+                rock: RockContent {
+                    density_permille: 200,
+                },
+            },
         },
     }
 }
@@ -162,8 +178,8 @@ fn terrain_history_fingerprint() -> u64 {
     let mut hasher = Fnv1a64::new();
     for &(op, x, y) in TERRAIN_OPS {
         let outcome = match op {
-            Op::Raise => raise(&mut field, x, y, &params),
-            Op::Lower => lower(&mut field, x, y, &params),
+            Op::Raise => raise(&mut field, x, y, &params, None),
+            Op::Lower => lower(&mut field, x, y, &params, None),
         };
         hasher.write_u64(u64::from(outcome.moved));
         for gy in 0..field.height() {
@@ -196,5 +212,147 @@ fn terrain_history_matches_committed_golden() {
         "terrain shaping diverged from the committed golden; if this change to \
          the cascade/cost model is intentional, update GOLDEN_TERRAIN and say \
          so in the PR"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Worldgen determinism (issue #7 Phase 2, ADR 0021).
+//
+// "Same seed + same params ⇒ the same world, forever" (I3). A fixed
+// WorldgenParams generates a field whose full heightmap is fingerprinted; the
+// golden guards the noise → mask → band → conform pipeline against silent drift.
+// ---------------------------------------------------------------------------
+
+/// The terrain step invariant the generated world must satisfy (ADR 0017); the
+/// shipped unit step, which the whole model assumes.
+const WORLDGEN_MAX_STEP: u32 = 1;
+
+/// Committed golden fingerprint of the world generated from [`worldgen_fixture`]
+/// at [`WORLDGEN_MAX_STEP`]. Like [`GOLDEN`], recompute this ONLY for an
+/// intentional change to the generator, and call it out in the PR.
+const GOLDEN_WORLDGEN: u64 = 0xB61C_5EB9_7DB0_298B;
+
+/// A small, fixed island for the golden: an odd, non-square grid so a scaling
+/// or indexing slip perturbs the fingerprint, with mixed relief.
+fn worldgen_fixture() -> WorldgenParams {
+    WorldgenParams {
+        width: 24,
+        height: 20,
+        seed: 0xC0FF_EE99,
+        sea_level: 0,
+        land_percent: 55,
+        shape: Shape::Island,
+        relief: 10,
+        feature_size: 8,
+        detail: 3,
+    }
+}
+
+/// Fingerprint the whole generated field (dimensions + row-major heights).
+fn worldgen_fingerprint() -> u64 {
+    let field = generate(&worldgen_fixture(), WORLDGEN_MAX_STEP);
+    let mut hasher = Fnv1a64::new();
+    hasher.write_u64(u64::from(field.width()));
+    hasher.write_u64(u64::from(field.height()));
+    for gy in 0..field.height() {
+        for gx in 0..field.width() {
+            let cell = field.get(gx, gy).expect("in-bounds cell is readable");
+            // Fixed little-endian bit pattern of the signed height — stable
+            // across platforms, no lossy cast (mirrors the terrain golden).
+            hasher.write_u64(u64::from(u32::from_le_bytes(cell.to_le_bytes())));
+        }
+    }
+    hasher.finish()
+}
+
+#[test]
+fn worldgen_is_deterministic() {
+    assert_eq!(
+        worldgen_fingerprint(),
+        worldgen_fingerprint(),
+        "two generations from the same seed + params diverged (I3 violation)"
+    );
+}
+
+#[test]
+fn worldgen_matches_committed_golden() {
+    assert_eq!(
+        worldgen_fingerprint(),
+        GOLDEN_WORLDGEN,
+        "worldgen diverged from the committed golden; if this change to the \
+         generator is intentional, update GOLDEN_WORLDGEN and say so in the PR"
+    );
+}
+
+#[test]
+fn worldgen_field_satisfies_the_step_invariant() {
+    let field = generate(&worldgen_fixture(), WORLDGEN_MAX_STEP);
+    assert!(
+        field.satisfies_step_invariant(WORLDGEN_MAX_STEP),
+        "the generator must hand back an invariant-valid field (ADR 0021 §3)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Immovable-feature placement determinism (issue #7 Phase 3, ADR 0017 §5).
+//
+// "Same seed + params ⇒ the same immovables." A fixed content catalogue over
+// the fixture world fingerprints to GOLDEN_FEATURES, guarding seeded placement.
+// ---------------------------------------------------------------------------
+
+/// Committed golden fingerprint of the immovables placed on [`worldgen_fixture`]
+/// with [`content_fixture`]. Recompute ONLY for an intentional change to
+/// placement, and call it out in the PR.
+const GOLDEN_FEATURES: u64 = 0x8047_875C_1251_BD26;
+
+/// A terrain content catalogue for the placement golden: dense enough that both
+/// trees (on land) and rock (on the peak) actually appear.
+fn content_fixture() -> TerrainContent {
+    TerrainContent {
+        shore: ShoreContent { band: 2 },
+        mountain: MountainContent { min_height: 6 },
+        tree: TreeContent {
+            density_permille: 250,
+        },
+        rock: RockContent {
+            density_permille: 400,
+        },
+    }
+}
+
+/// Fingerprint the placed features (bare / tree / rock per vertex, row-major).
+fn features_fingerprint() -> u64 {
+    let field = generate(&worldgen_fixture(), WORLDGEN_MAX_STEP);
+    let features = place_features(&field, &worldgen_fixture(), &content_fixture());
+    let mut hasher = Fnv1a64::new();
+    for gy in 0..features.height() {
+        for gx in 0..features.width() {
+            let code = match features.get(gx, gy) {
+                None => 0,
+                Some(Feature::Tree) => 1,
+                Some(Feature::Rock) => 2,
+            };
+            hasher.write_u64(code);
+        }
+    }
+    hasher.finish()
+}
+
+#[test]
+fn feature_placement_is_deterministic() {
+    assert_eq!(
+        features_fingerprint(),
+        features_fingerprint(),
+        "two placements from the same seed + content diverged (I3 violation)"
+    );
+}
+
+#[test]
+fn feature_placement_matches_committed_golden() {
+    assert_eq!(
+        features_fingerprint(),
+        GOLDEN_FEATURES,
+        "feature placement diverged from the committed golden; if intentional, \
+         update GOLDEN_FEATURES and say so in the PR"
     );
 }

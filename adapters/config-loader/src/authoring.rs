@@ -8,9 +8,10 @@
 
 use garde::Validate;
 use providence_config::{
-    BackgroundParams, CameraParams, EconomyParams, HudParams, LightingParams, ManaMode, ManaParams,
-    MeshParams, OpponentParams, PaletteParams, Params, PlaceholderParams, RaiseParams,
-    RenderParams, SimParams, TerrainParams, WinLossParams, WindowParams,
+    BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams, LightingParams,
+    ManaMode, ManaParams, MeshParams, MountainContent, OpponentParams, PaletteParams, Params,
+    PlaceholderParams, RaiseParams, RenderParams, RockContent, Shape, ShoreContent, SimParams,
+    TerrainContent, TerrainParams, TreeContent, WinLossParams, WindowParams, WorldgenParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -25,6 +26,10 @@ pub struct ConfigRoot {
     /// `sim.*` — deterministic-simulation parameters.
     #[garde(dive)]
     pub sim: SimSection,
+    /// `content.*` — content definitions the core reads as data
+    /// (docs/40-parameterisation.md §2.2, §3): the terrain type catalogue today.
+    #[garde(dive)]
+    pub content: ContentSection,
     /// `render.*` — presentation parameters for the workbench renderer
     /// (ADR 0020 §4). Projected into a standalone [`RenderParams`] — **not**
     /// into the core-injected [`Params`], because presentation is outside the
@@ -51,6 +56,9 @@ pub struct MetaSection {
 #[derive(Debug, Deserialize, JsonSchema, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct SimSection {
+    /// `sim.worldgen.*` — the seeded world generator (ADR 0021).
+    #[garde(dive)]
+    pub worldgen: WorldgenSection,
     /// `sim.opponent.*` — the rival-deity subsystem.
     #[garde(dive)]
     pub opponent: OpponentSection,
@@ -77,6 +85,64 @@ pub struct OpponentSection {
     /// player. The general `sim.<subsystem>.enabled` isolation seam.
     #[garde(skip)]
     pub enabled: bool,
+}
+
+/// `sim.worldgen.*` — the seeded, parameterised world generator (ADR 0021). An
+/// always-on foundation subsystem, so — like `sim.terrain.*` — it carries no
+/// `enabled` seam (ADR 0016). Every field is structural / load-time.
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct WorldgenSection {
+    /// `sim.worldgen.width` — map width in vertices. Bounded so a world is
+    /// large enough to read and small enough to generate cheaply.
+    #[garde(range(min = 2, max = 1024))]
+    pub width: u32,
+    /// `sim.worldgen.height` — map height (depth) in vertices.
+    #[garde(range(min = 2, max = 1024))]
+    pub height: u32,
+    /// `sim.worldgen.seed` — the `u64` the generator draws from. Any value is
+    /// valid; it names the specific world within the chosen flavour.
+    #[garde(skip)]
+    pub seed: u64,
+    /// `sim.worldgen.sea_level` — the waterline datum. Signed; any value.
+    #[garde(skip)]
+    pub sea_level: i32,
+    /// `sim.worldgen.land_percent` — target percentage of the map above sea
+    /// level. Held inside `(0, 100)` so neither an all-sea nor all-land world
+    /// is asked for.
+    #[garde(range(min = 1, max = 99))]
+    pub land_percent: u32,
+    /// `sim.worldgen.shape` — the land-arrangement mode (ADR 0021 §2a).
+    #[garde(skip)]
+    pub shape: ShapeAuthored,
+    /// `sim.worldgen.relief` — the vertical drama: max height steps land rises
+    /// above sea level. At least 1 (a flat, all-shore world).
+    #[garde(range(min = 1))]
+    pub relief: i32,
+    /// `sim.worldgen.feature_size` — base noise wavelength in vertices. Bounded
+    /// away from 0 (a wavelength must be positive) and capped so the coarse
+    /// masks stay in range.
+    #[garde(range(min = 1, max = 1024))]
+    pub feature_size: u32,
+    /// `sim.worldgen.detail` — number of noise octaves. Bounded to a small
+    /// range: past a handful, octaves fall below the fixed-point floor.
+    #[garde(range(min = 1, max = 8))]
+    pub detail: u32,
+}
+
+/// `sim.worldgen.shape` values, authored as `snake_case` strings in TOML
+/// (`shape = "island"`). Maps to the core [`Shape`].
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeAuthored {
+    /// One landmass ringed by sea (the shipped default).
+    Island,
+    /// Land filling most of the map, receding to a coastline at the edges.
+    Continent,
+    /// Several scattered islands.
+    Archipelago,
+    /// Mostly land with interior lakes.
+    Inland,
 }
 
 /// `sim.economy.*` — the faith/mana economy subsystem.
@@ -156,6 +222,76 @@ pub struct PlaceholderSection {
     /// advances per step. Hot-reloadable (a pure balance value).
     #[garde(range(min = 1))]
     pub tick_increment: u64,
+}
+
+/// `content.*` (docs/40-parameterisation.md §2.2, §3) — content definitions the
+/// core reads as data. The first `content.*` table to land (ADR 0021): the
+/// terrain type catalogue.
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct ContentSection {
+    /// `content.terrain.*` — the terrain type catalogue.
+    #[garde(dive)]
+    pub terrain: TerrainContentSection,
+}
+
+/// `content.terrain.*` — the terrain type catalogue (ADR 0017 §1, ADR 0021 §4):
+/// the thresholds that name *shore* and *mountain* over the height field.
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct TerrainContentSection {
+    /// `content.terrain.shore.*` — the coastal band.
+    #[garde(dive)]
+    pub shore: ShoreSection,
+    /// `content.terrain.mountain.*` — the high-ground band.
+    #[garde(dive)]
+    pub mountain: MountainSection,
+    /// `content.terrain.tree.*` — trees (terrain-owned immovable).
+    #[garde(dive)]
+    pub tree: TreeSection,
+    /// `content.terrain.rock.*` — rock (terrain-owned immovable).
+    #[garde(dive)]
+    pub rock: RockSection,
+}
+
+/// `content.terrain.shore.*` — the shore band (ADR 0017 §1).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct ShoreSection {
+    /// `content.terrain.shore.band` — height steps above sea level still
+    /// counted as shore. Any value (0 = no shore band).
+    #[garde(skip)]
+    pub band: u32,
+}
+
+/// `content.terrain.mountain.*` — the mountain band (ADR 0017 §1).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct MountainSection {
+    /// `content.terrain.mountain.min_height` — height at or above which a
+    /// vertex is mountain. Any value.
+    #[garde(skip)]
+    pub min_height: i32,
+}
+
+/// `content.terrain.tree.*` — trees, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct TreeSection {
+    /// `content.terrain.tree.density_permille` — trees per 1000 eligible land
+    /// vertices. A probability, so it is bounded by the per-mille base.
+    #[garde(range(max = 1000))]
+    pub density_permille: u32,
+}
+
+/// `content.terrain.rock.*` — rock, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RockSection {
+    /// `content.terrain.rock.density_permille` — rock per 1000 eligible
+    /// mountain vertices. Bounded by the per-mille base.
+    #[garde(range(max = 1000))]
+    pub density_permille: u32,
 }
 
 /// `render.*` (docs/40-parameterisation.md §2.2) — presentation config for the
@@ -328,6 +464,17 @@ impl ConfigRoot {
     pub fn into_params(self) -> Params {
         Params {
             sim: SimParams {
+                worldgen: WorldgenParams {
+                    width: self.sim.worldgen.width,
+                    height: self.sim.worldgen.height,
+                    seed: self.sim.worldgen.seed,
+                    sea_level: self.sim.worldgen.sea_level,
+                    land_percent: self.sim.worldgen.land_percent,
+                    shape: self.sim.worldgen.shape.into_param(),
+                    relief: self.sim.worldgen.relief,
+                    feature_size: self.sim.worldgen.feature_size,
+                    detail: self.sim.worldgen.detail,
+                },
                 opponent: OpponentParams {
                     enabled: self.sim.opponent.enabled,
                 },
@@ -348,6 +495,22 @@ impl ConfigRoot {
                 },
                 placeholder: PlaceholderParams {
                     tick_increment: self.sim.placeholder.tick_increment,
+                },
+            },
+            content: ContentParams {
+                terrain: TerrainContent {
+                    shore: ShoreContent {
+                        band: self.content.terrain.shore.band,
+                    },
+                    mountain: MountainContent {
+                        min_height: self.content.terrain.mountain.min_height,
+                    },
+                    tree: TreeContent {
+                        density_permille: self.content.terrain.tree.density_permille,
+                    },
+                    rock: RockContent {
+                        density_permille: self.content.terrain.rock.density_permille,
+                    },
                 },
             },
         }
@@ -412,6 +575,19 @@ impl ManaModeAuthored {
             ManaModeAuthored::Normal => ManaMode::Normal,
             ManaModeAuthored::Fast => ManaMode::Fast,
             ManaModeAuthored::Unlimited => ManaMode::Unlimited,
+        }
+    }
+}
+
+impl ShapeAuthored {
+    /// Map the authored TOML value to the core [`Shape`]. Purely mechanical;
+    /// covered by the loader tests.
+    fn into_param(self) -> Shape {
+        match self {
+            ShapeAuthored::Island => Shape::Island,
+            ShapeAuthored::Continent => Shape::Continent,
+            ShapeAuthored::Archipelago => Shape::Archipelago,
+            ShapeAuthored::Inland => Shape::Inland,
         }
     }
 }

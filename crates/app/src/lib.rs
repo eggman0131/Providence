@@ -46,8 +46,9 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use providence_config::{
-        EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams,
-        RaiseParams, SimParams, TerrainParams, WinLossParams,
+        ContentParams, EconomyParams, ManaMode, ManaParams, MountainContent, OpponentParams,
+        Params, PlaceholderParams, RaiseParams, RockContent, Shape, ShoreContent, SimParams,
+        TerrainContent, TerrainParams, TreeContent, WinLossParams, WorldgenParams,
     };
 
     use super::Session;
@@ -55,6 +56,17 @@ mod tests {
     fn params() -> Params {
         Params {
             sim: SimParams {
+                worldgen: WorldgenParams {
+                    width: 32,
+                    height: 32,
+                    seed: 1,
+                    sea_level: 0,
+                    land_percent: 55,
+                    shape: Shape::Island,
+                    relief: 12,
+                    feature_size: 16,
+                    detail: 3,
+                },
                 opponent: OpponentParams { enabled: true },
                 economy: EconomyParams {
                     mana: ManaParams {
@@ -68,6 +80,18 @@ mod tests {
                     raise: RaiseParams { mana_cost: 1 },
                 },
                 placeholder: PlaceholderParams { tick_increment: 1 },
+            },
+            content: ContentParams {
+                terrain: TerrainContent {
+                    shore: ShoreContent { band: 2 },
+                    mountain: MountainContent { min_height: 12 },
+                    tree: TreeContent {
+                        density_permille: 120,
+                    },
+                    rock: RockContent {
+                        density_permille: 200,
+                    },
+                },
             },
         }
     }
