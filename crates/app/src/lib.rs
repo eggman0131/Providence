@@ -46,8 +46,8 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use providence_config::{
-        EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, SimParams,
-        WinLossParams,
+        EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams,
+        RaiseParams, SimParams, TerrainParams, WinLossParams,
     };
 
     use super::Session;
@@ -62,6 +62,11 @@ mod tests {
                     },
                 },
                 winloss: WinLossParams { enabled: true },
+                terrain: TerrainParams {
+                    max_step: 1,
+                    max_height: 64,
+                    raise: RaiseParams { mana_cost: 1 },
+                },
                 placeholder: PlaceholderParams { tick_increment: 1 },
             },
         }

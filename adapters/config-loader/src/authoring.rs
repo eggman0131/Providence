@@ -8,8 +8,8 @@
 
 use garde::Validate;
 use providence_config::{
-    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, SimParams,
-    WinLossParams,
+    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, RaiseParams,
+    SimParams, TerrainParams, WinLossParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -53,6 +53,9 @@ pub struct SimSection {
     /// `sim.winloss.*` — the win/loss evaluation subsystem.
     #[garde(dive)]
     pub winloss: WinLossSection,
+    /// `sim.terrain.*` — the vertex height-field subsystem (ADR 0017).
+    #[garde(dive)]
+    pub terrain: TerrainSection,
     /// `sim.placeholder.*` — Phase-1 gate scaffolding (contract §7.2);
     /// deleted when the Phase-3 core consumes real subsystem state.
     #[garde(dive)]
@@ -111,6 +114,33 @@ pub struct WinLossSection {
     pub enabled: bool,
 }
 
+/// `sim.terrain.*` — the vertex height-field subsystem (ADR 0017).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct TerrainSection {
+    /// `sim.terrain.max_step` — maximum orthogonal height step; the step
+    /// invariant (ADR 0017 §2). Structural: the model assumes 1.
+    #[garde(range(min = 1))]
+    pub max_step: u32,
+    /// `sim.terrain.max_height` — the world height ceiling a raise cannot
+    /// exceed; bounds the cascade radius (ADR 0017 §3).
+    #[garde(range(min = 1))]
+    pub max_height: i32,
+    /// `sim.terrain.raise.*` — the raise/lower shaping operation.
+    #[garde(dive)]
+    pub raise: RaiseSection,
+}
+
+/// `sim.terrain.raise.*` — the raise/lower shaping operation (ADR 0017 §3).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RaiseSection {
+    /// `sim.terrain.raise.mana_cost` — mana per vertex actually moved
+    /// (ADR 0017 §3). Any value is valid (0 = free shaping in exploration).
+    #[garde(skip)]
+    pub mana_cost: u32,
+}
+
 /// `sim.placeholder.*` — placeholder parameters proving config → core wiring.
 #[derive(Debug, Deserialize, JsonSchema, Validate)]
 #[serde(deny_unknown_fields)]
@@ -138,6 +168,13 @@ impl ConfigRoot {
                 },
                 winloss: WinLossParams {
                     enabled: self.sim.winloss.enabled,
+                },
+                terrain: TerrainParams {
+                    max_step: self.sim.terrain.max_step,
+                    max_height: self.sim.terrain.max_height,
+                    raise: RaiseParams {
+                        mana_cost: self.sim.terrain.raise.mana_cost,
+                    },
                 },
                 placeholder: PlaceholderParams {
                     tick_increment: self.sim.placeholder.tick_increment,

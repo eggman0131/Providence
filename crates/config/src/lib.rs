@@ -36,6 +36,10 @@ pub struct SimParams {
     pub economy: EconomyParams,
     /// `sim.winloss.*` — the win/loss evaluation subsystem.
     pub winloss: WinLossParams,
+    /// `sim.terrain.*` — the vertex height-field subsystem (ADR 0017). The
+    /// game's foundation substrate; always on, so it carries no `enabled`
+    /// seam (unlike the toggleable peers above).
+    pub terrain: TerrainParams,
     /// `sim.placeholder.*` — Phase-1 gate-scaffolding parameters; the core's
     /// sole consumed value until Phase 3 gives it real subsystem state, then
     /// deleted (prefer deletion, contract §4.1).
@@ -86,6 +90,37 @@ pub struct WinLossParams {
     /// `sim.winloss.enabled` — `false` ⇒ no win/loss evaluation during free
     /// play. The general isolation seam.
     pub enabled: bool,
+}
+
+/// `sim.terrain.*` — the vertex height-field subsystem (ADR 0017).
+///
+/// Governs the integer height field the land is built on. `max_step` and
+/// `max_height` are **structural** (load-time, not hot-reloadable): the
+/// model, mesh, and cascade are written assuming `max_step == 1`, and a
+/// value ≠ 1 is not a supported configuration until proven otherwise
+/// (ADR 0017 consequences).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerrainParams {
+    /// `sim.terrain.max_step` — the maximum height difference permitted
+    /// between two orthogonally-adjacent vertices (the *step invariant*,
+    /// ADR 0017 §2). Default 1.
+    pub max_step: u32,
+    /// `sim.terrain.max_height` — the world height ceiling a raise cannot
+    /// exceed; it also bounds the cascade radius, so no separate radius limit
+    /// is needed for termination (ADR 0017 §3).
+    pub max_height: i32,
+    /// `sim.terrain.raise.*` — the raise/lower shaping operation.
+    pub raise: RaiseParams,
+}
+
+/// `sim.terrain.raise.*` — the raise/lower shaping operation (ADR 0017 §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RaiseParams {
+    /// `sim.terrain.raise.mana_cost` — mana charged per vertex **actually
+    /// moved** by a raise/lower. The cost model falls out of the cascade
+    /// (ADR 0017 §3). Wired now; spent once the economy subsystem is unparked
+    /// (Phase 2 returns it without deducting — the economy is parked).
+    pub mana_cost: u32,
 }
 
 /// `sim.placeholder.*` — placeholder parameters proving the config → core
