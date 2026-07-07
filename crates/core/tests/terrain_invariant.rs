@@ -12,10 +12,15 @@
 //! so the operation precondition holds on entry to the first op; if every op
 //! restores the invariant, it holds inductively on entry to every op after —
 //! and each iteration re-checks it, validating that induction step by step.
+//!
+//! Each scenario also scatters random **immovables** (issue #7 Phase 3): an op
+//! whose cascade would move one is refused (leaving the field unchanged), and an
+//! applied op never moves one — so the invariant must hold after *every* op
+//! either way. This exercises the refusal-and-rollback path under randomisation.
 
 use providence_config::{RaiseParams, TerrainParams};
 use providence_core::rng::SplitMix64;
-use providence_core::terrain::{HeightField, lower, raise};
+use providence_core::terrain::{Feature, FeatureMap, HeightField, lower, raise};
 
 // Test-scale knobs (not shipped behaviour): enough random fields and ops to
 // force deep cascades, ceiling clamps, and world-edge halts, while staying a
@@ -58,15 +63,27 @@ fn every_shaping_op_preserves_the_step_invariant() {
             "a flat field must satisfy the invariant (scenario {scenario})"
         );
 
+        // Scatter ~1-in-16 immovables (both kinds) so many ops must refuse and
+        // roll back, while plenty of others still cascade freely.
+        let mut cells = Vec::with_capacity(width as usize * height as usize);
+        for _ in 0..width as usize * height as usize {
+            cells.push(match below(&mut rng, 16) {
+                0 => Some(Feature::Rock),
+                1 => Some(Feature::Tree),
+                _ => None,
+            });
+        }
+        let features = FeatureMap::from_cells(width, height, cells).expect("well-sized map");
+
         for op in 0..OPS_PER_SCENARIO {
             // A target that is usually in-bounds but occasionally past an edge
             // (`== width` / `== height`) to exercise the out-of-bounds no-op.
             let x = below(&mut rng, width + 1);
             let y = below(&mut rng, height + 1);
             let outcome = if rng.next_u64() & 1 == 0 {
-                raise(&mut field, x, y, &params)
+                raise(&mut field, x, y, &params, Some(&features))
             } else {
-                lower(&mut field, x, y, &params)
+                lower(&mut field, x, y, &params, Some(&features))
             };
 
             assert!(

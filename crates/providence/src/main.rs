@@ -22,7 +22,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use providence_config::{Params, RenderParams, TerrainParams};
-use providence_core::terrain::{HeightField, TerrainType, classify_vertex, generate, raise};
+use providence_core::terrain::{
+    Feature, FeatureMap, HeightField, TerrainType, classify_vertex, generate, place_features, raise,
+};
 use providence_ports::{RendererPort, TerrainFrame};
 use providence_renderer::{HeadlessRenderer, NoopRenderer, OrbitController, WindowRenderer};
 
@@ -136,7 +138,8 @@ fn run_workbench() -> ExitCode {
     };
 
     let field = generate_world(&params);
-    print_terrain_census(&field, &params);
+    let features = place_features(&field, &params.sim.worldgen, &params.content.terrain);
+    print_terrain_census(&field, &features, &params);
     let heights = frame_heights(&field);
     let frame = TerrainFrame::new(field.width(), field.height(), &heights);
 
@@ -170,7 +173,8 @@ fn run_capture(args: &[String]) -> ExitCode {
     };
 
     let field = generate_world(&params);
-    print_terrain_census(&field, &params);
+    let features = place_features(&field, &params.sim.worldgen, &params.content.terrain);
+    print_terrain_census(&field, &features, &params);
     let heights = frame_heights(&field);
     let frame = TerrainFrame::new(field.width(), field.height(), &heights);
 
@@ -237,10 +241,11 @@ fn generate_world(params: &Params) -> HeightField {
 /// water / shore / land / mountain (ADR 0017 §1), reading the `content.terrain.*`
 /// thresholds. Proves worldgen + the derivations are wired end-to-end before the
 /// 3D view even opens.
-fn print_terrain_census(field: &HeightField, params: &Params) {
+fn print_terrain_census(field: &HeightField, features: &FeatureMap, params: &Params) {
     let worldgen = &params.sim.worldgen;
     let terrain = &params.content.terrain;
     let (mut water, mut shore, mut land, mut mountain) = (0_u32, 0_u32, 0_u32, 0_u32);
+    let (mut trees, mut rocks) = (0_u32, 0_u32);
     let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
     for y in 0..field.height() {
         for x in 0..field.width() {
@@ -258,6 +263,11 @@ fn print_terrain_census(field: &HeightField, params: &Params) {
                 TerrainType::Land => land += 1,
                 TerrainType::Mountain => mountain += 1,
             }
+            match features.get(x, y) {
+                Some(Feature::Tree) => trees += 1,
+                Some(Feature::Rock) => rocks += 1,
+                None => {}
+            }
         }
     }
     let total = field.width() * field.height();
@@ -266,6 +276,7 @@ fn print_terrain_census(field: &HeightField, params: &Params) {
         "providence: generated a {w}×{h} {shape:?} world (seed {seed}) — \
          {dry}/{total} vertices dry ({percent}%): \
          water {water}, shore {shore}, land {land}, mountain {mountain}; \
+         immovables: {trees} trees, {rocks} rock; \
          heights {lowest}..={highest}, invariant held = {ok}",
         w = field.width(),
         h = field.height(),
@@ -298,7 +309,9 @@ fn print_terrain_demo(terrain: &TerrainParams) -> HeightField {
     let mut total_moved: u32 = 0;
     let mut total_cost: u64 = 0;
     for _ in 0..DEMO_RAISES {
-        let outcome = raise(&mut field, mid, mid, terrain);
+        // The shaping demo carries no immovables (None); the workbench world
+        // does (see run_workbench / print_terrain_census).
+        let outcome = raise(&mut field, mid, mid, terrain, None);
         total_moved += outcome.moved;
         total_cost += outcome.cost;
     }

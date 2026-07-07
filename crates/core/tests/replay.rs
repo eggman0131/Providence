@@ -14,13 +14,13 @@
 
 use providence_config::{
     ContentParams, EconomyParams, ManaMode, ManaParams, MountainContent, OpponentParams, Params,
-    PlaceholderParams, RaiseParams, Shape, ShoreContent, SimParams, TerrainContent, TerrainParams,
-    WinLossParams, WorldgenParams,
+    PlaceholderParams, RaiseParams, RockContent, Shape, ShoreContent, SimParams, TerrainContent,
+    TerrainParams, TreeContent, WinLossParams, WorldgenParams,
 };
 use providence_core::hash::Fnv1a64;
 use providence_core::rng::SplitMix64;
 use providence_core::state::{State, step};
-use providence_core::terrain::{HeightField, generate, lower, raise};
+use providence_core::terrain::{Feature, HeightField, generate, lower, place_features, raise};
 
 const SEED: u64 = 0xD1CE;
 const STEPS: u64 = 1_000;
@@ -52,6 +52,12 @@ fn fixture_params() -> Params {
             terrain: TerrainContent {
                 shore: ShoreContent { band: 2 },
                 mountain: MountainContent { min_height: 12 },
+                tree: TreeContent {
+                    density_permille: 120,
+                },
+                rock: RockContent {
+                    density_permille: 200,
+                },
             },
         },
     }
@@ -172,8 +178,8 @@ fn terrain_history_fingerprint() -> u64 {
     let mut hasher = Fnv1a64::new();
     for &(op, x, y) in TERRAIN_OPS {
         let outcome = match op {
-            Op::Raise => raise(&mut field, x, y, &params),
-            Op::Lower => lower(&mut field, x, y, &params),
+            Op::Raise => raise(&mut field, x, y, &params, None),
+            Op::Lower => lower(&mut field, x, y, &params, None),
         };
         hasher.write_u64(u64::from(outcome.moved));
         for gy in 0..field.height() {
@@ -284,5 +290,69 @@ fn worldgen_field_satisfies_the_step_invariant() {
     assert!(
         field.satisfies_step_invariant(WORLDGEN_MAX_STEP),
         "the generator must hand back an invariant-valid field (ADR 0021 §3)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Immovable-feature placement determinism (issue #7 Phase 3, ADR 0017 §5).
+//
+// "Same seed + params ⇒ the same immovables." A fixed content catalogue over
+// the fixture world fingerprints to GOLDEN_FEATURES, guarding seeded placement.
+// ---------------------------------------------------------------------------
+
+/// Committed golden fingerprint of the immovables placed on [`worldgen_fixture`]
+/// with [`content_fixture`]. Recompute ONLY for an intentional change to
+/// placement, and call it out in the PR.
+const GOLDEN_FEATURES: u64 = 0x8047_875C_1251_BD26;
+
+/// A terrain content catalogue for the placement golden: dense enough that both
+/// trees (on land) and rock (on the peak) actually appear.
+fn content_fixture() -> TerrainContent {
+    TerrainContent {
+        shore: ShoreContent { band: 2 },
+        mountain: MountainContent { min_height: 6 },
+        tree: TreeContent {
+            density_permille: 250,
+        },
+        rock: RockContent {
+            density_permille: 400,
+        },
+    }
+}
+
+/// Fingerprint the placed features (bare / tree / rock per vertex, row-major).
+fn features_fingerprint() -> u64 {
+    let field = generate(&worldgen_fixture(), WORLDGEN_MAX_STEP);
+    let features = place_features(&field, &worldgen_fixture(), &content_fixture());
+    let mut hasher = Fnv1a64::new();
+    for gy in 0..features.height() {
+        for gx in 0..features.width() {
+            let code = match features.get(gx, gy) {
+                None => 0,
+                Some(Feature::Tree) => 1,
+                Some(Feature::Rock) => 2,
+            };
+            hasher.write_u64(code);
+        }
+    }
+    hasher.finish()
+}
+
+#[test]
+fn feature_placement_is_deterministic() {
+    assert_eq!(
+        features_fingerprint(),
+        features_fingerprint(),
+        "two placements from the same seed + content diverged (I3 violation)"
+    );
+}
+
+#[test]
+fn feature_placement_matches_committed_golden() {
+    assert_eq!(
+        features_fingerprint(),
+        GOLDEN_FEATURES,
+        "feature placement diverged from the committed golden; if intentional, \
+         update GOLDEN_FEATURES and say so in the PR"
     );
 }

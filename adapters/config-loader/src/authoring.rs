@@ -10,8 +10,8 @@ use garde::Validate;
 use providence_config::{
     BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams, LightingParams,
     ManaMode, ManaParams, MeshParams, MountainContent, OpponentParams, PaletteParams, Params,
-    PlaceholderParams, RaiseParams, RenderParams, Shape, ShoreContent, SimParams, TerrainContent,
-    TerrainParams, WinLossParams, WindowParams, WorldgenParams,
+    PlaceholderParams, RaiseParams, RenderParams, RockContent, Shape, ShoreContent, SimParams,
+    TerrainContent, TerrainParams, TreeContent, WinLossParams, WindowParams, WorldgenParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -246,6 +246,12 @@ pub struct TerrainContentSection {
     /// `content.terrain.mountain.*` — the high-ground band.
     #[garde(dive)]
     pub mountain: MountainSection,
+    /// `content.terrain.tree.*` — trees (terrain-owned immovable).
+    #[garde(dive)]
+    pub tree: TreeSection,
+    /// `content.terrain.rock.*` — rock (terrain-owned immovable).
+    #[garde(dive)]
+    pub rock: RockSection,
 }
 
 /// `content.terrain.shore.*` — the shore band (ADR 0017 §1).
@@ -266,6 +272,26 @@ pub struct MountainSection {
     /// vertex is mountain. Any value.
     #[garde(skip)]
     pub min_height: i32,
+}
+
+/// `content.terrain.tree.*` — trees, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct TreeSection {
+    /// `content.terrain.tree.density_permille` — trees per 1000 eligible land
+    /// vertices. A probability, so it is bounded by the per-mille base.
+    #[garde(range(max = 1000))]
+    pub density_permille: u32,
+}
+
+/// `content.terrain.rock.*` — rock, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RockSection {
+    /// `content.terrain.rock.density_permille` — rock per 1000 eligible
+    /// mountain vertices. Bounded by the per-mille base.
+    #[garde(range(max = 1000))]
+    pub density_permille: u32,
 }
 
 /// `render.*` (docs/40-parameterisation.md §2.2) — presentation config for the
@@ -478,6 +504,12 @@ impl ConfigRoot {
                     },
                     mountain: MountainContent {
                         min_height: self.content.terrain.mountain.min_height,
+                    },
+                    tree: TreeContent {
+                        density_permille: self.content.terrain.tree.density_permille,
+                    },
+                    rock: RockContent {
+                        density_permille: self.content.terrain.rock.density_permille,
                     },
                 },
             },

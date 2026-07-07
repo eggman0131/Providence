@@ -19,9 +19,11 @@
 //! straight out — the price is the count of vertices actually moved.
 
 use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 
 use providence_config::TerrainParams;
 
+use super::feature::FeatureMap;
 use super::field::{Height, HeightField};
 
 /// The four orthogonal neighbour offsets — the only adjacency the step
@@ -72,8 +74,19 @@ enum Direction {
 ///
 /// Preserves the invariant iff the field satisfied it on entry (the operation
 /// precondition). Pure and in place (I3).
-pub fn raise(field: &mut HeightField, x: u32, y: u32, params: &TerrainParams) -> ShapeOutcome {
-    shape(field, x, y, params, &Direction::Raise)
+///
+/// `features` names the terrain-owned immovables (ADR 0017 §5): if the cascade
+/// would move a vertex holding one — or the target itself is immovable — the
+/// **whole op is refused** ([`ShapeOutcome::UNCHANGED`], field left untouched),
+/// never silently destroying it. Pass `None` for a world with no immovables.
+pub fn raise(
+    field: &mut HeightField,
+    x: u32,
+    y: u32,
+    params: &TerrainParams,
+    features: Option<&FeatureMap>,
+) -> ShapeOutcome {
+    shape(field, x, y, params, &Direction::Raise, features)
 }
 
 /// Lower the vertex at `(x, y)` by one `max_step`, cascading outward so the
@@ -85,23 +98,40 @@ pub fn raise(field: &mut HeightField, x: u32, y: u32, params: &TerrainParams) ->
 /// #7); an out-of-bounds `(x, y)` is a no-op ([`ShapeOutcome::UNCHANGED`]).
 ///
 /// Preserves the invariant iff the field satisfied it on entry. Pure and in
-/// place (I3).
-pub fn lower(field: &mut HeightField, x: u32, y: u32, params: &TerrainParams) -> ShapeOutcome {
-    shape(field, x, y, params, &Direction::Lower)
+/// place (I3). `features` refuses the op if its cascade would move an immovable
+/// (see [`raise`]).
+pub fn lower(
+    field: &mut HeightField,
+    x: u32,
+    y: u32,
+    params: &TerrainParams,
+    features: Option<&FeatureMap>,
+) -> ShapeOutcome {
+    shape(field, x, y, params, &Direction::Lower, features)
 }
 
 /// Shared engine for [`raise`] / [`lower`]: pin the target, then relax the
 /// grid back into the step invariant, counting the vertices that moved.
+///
+/// If `features` marks the target — or any vertex the cascade would move — as
+/// immovable (ADR 0017 §5), the op is **refused**: every write made so far is
+/// rolled back and [`ShapeOutcome::UNCHANGED`] returned, so the field is left
+/// exactly as it entered. With `features == None` no vertex is immovable and
+/// the relaxation runs unchanged.
 fn shape(
     field: &mut HeightField,
     x: u32,
     y: u32,
     params: &TerrainParams,
     direction: &Direction,
+    features: Option<&FeatureMap>,
 ) -> ShapeOutcome {
     let Some(current) = field.get(x, y) else {
         return ShapeOutcome::UNCHANGED; // out of bounds — nothing to shape
     };
+    if is_immovable(features, x, y) {
+        return ShapeOutcome::UNCHANGED; // the target itself cannot be shaped
+    }
 
     // Bounds are computed in i64 so the extremes never panic on overflow;
     // heights are pinned back into range on write.
@@ -120,8 +150,10 @@ fn shape(
         return ShapeOutcome::UNCHANGED;
     }
 
+    // Every write is recorded (position, previous height) so the op can be
+    // rolled back whole if the cascade reaches an immovable.
+    let mut undo: Vec<(u32, u32, Height)> = alloc::vec![(x, y, current)];
     field.set(x, y, target);
-    let mut moved: u32 = 1;
     let mut frontier = VecDeque::new();
     frontier.push_back((x, y));
 
@@ -148,16 +180,36 @@ fn shape(
                 Direction::Lower => i64::from(neighbour) > bound,
             };
             if violates {
+                if is_immovable(features, nx, ny) {
+                    // The cascade would disturb an immovable — refuse the whole
+                    // op and restore the field (ADR 0017 §5; no silent destruction).
+                    revert(field, &undo);
+                    return ShapeOutcome::UNCHANGED;
+                }
+                undo.push((nx, ny, neighbour));
                 field.set(nx, ny, as_height(bound));
-                moved += 1;
                 frontier.push_back((nx, ny));
             }
         }
     }
 
+    let moved = u32::try_from(undo.len()).unwrap_or(u32::MAX);
     ShapeOutcome {
         moved,
         cost: u64::from(moved) * u64::from(params.raise.mana_cost),
+    }
+}
+
+/// Whether `(x, y)` is immovable in `features` (never, when there are none).
+fn is_immovable(features: Option<&FeatureMap>, x: u32, y: u32) -> bool {
+    features.is_some_and(|map| map.is_immovable(x, y))
+}
+
+/// Restore every recorded `(x, y, previous)` write — the rollback that makes a
+/// refused op leave the field untouched.
+fn revert(field: &mut HeightField, undo: &[(u32, u32, Height)]) {
+    for &(x, y, previous) in undo {
+        field.set(x, y, previous);
     }
 }
 
@@ -186,9 +238,19 @@ fn as_height(value: i64) -> Height {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShapeOutcome, lower, raise};
-    use crate::terrain::HeightField;
+    use super::ShapeOutcome;
+    use crate::terrain::{Feature, FeatureMap, HeightField};
     use providence_config::{RaiseParams, TerrainParams};
+
+    // The pure-height shaping tests below carry no immovables. Wrap the ops so
+    // every existing call site reads exactly as before Phase 3 (features =
+    // None); the immovable-refusal tests call `super::raise` with a map.
+    fn raise(field: &mut HeightField, x: u32, y: u32, params: &TerrainParams) -> ShapeOutcome {
+        super::raise(field, x, y, params, None)
+    }
+    fn lower(field: &mut HeightField, x: u32, y: u32, params: &TerrainParams) -> ShapeOutcome {
+        super::lower(field, x, y, params, None)
+    }
 
     // The governed default (config/default.toml): the model is written for a
     // unit step (ADR 0017), so the tests pin the shipped value.
@@ -406,5 +468,90 @@ mod tests {
             field.satisfies_step_invariant(2),
             "the invariant holds at the configured step"
         );
+    }
+
+    // --- Immovable-feature refusal (issue #7 Phase 3, ADR 0017 §5) ------------
+
+    /// A feature map with a single immovable at `(fx, fy)` on a `w × h` grid.
+    fn one_immovable(w: u32, h: u32, fx: u32, fy: u32, kind: Feature) -> FeatureMap {
+        let mut cells: alloc::vec::Vec<Option<Feature>> =
+            alloc::vec![None; w as usize * h as usize];
+        cells[(fy * w + fx) as usize] = Some(kind);
+        FeatureMap::from_cells(w, h, cells).expect("a well-sized feature map")
+    }
+
+    #[test]
+    fn raising_an_immovable_target_is_refused() {
+        // You cannot shape the vertex a rock sits on: the op is a no-op and the
+        // field is untouched (no silent destruction).
+        let features = one_immovable(5, 5, 2, 2, Feature::Rock);
+        let mut field = HeightField::flat(5, 5, 0);
+        let before = field.clone();
+        let outcome = super::raise(&mut field, 2, 2, &params(64, 1), Some(&features));
+        assert_eq!(
+            outcome,
+            ShapeOutcome::UNCHANGED,
+            "an immovable target refuses"
+        );
+        assert_eq!(field, before, "the field is left exactly as it was");
+    }
+
+    #[test]
+    fn a_raise_whose_cascade_would_move_an_immovable_is_refused() {
+        // A tree sits on an orthogonal neighbour of the target. The first raise
+        // only lifts the target (no cascade); the second would cascade into the
+        // tree, so the whole op is refused and rolled back.
+        let features = one_immovable(7, 7, 2, 3, Feature::Tree);
+        let mut field = HeightField::flat(7, 7, 0);
+        super::raise(&mut field, 3, 3, &params(64, 1), Some(&features));
+        let before = field.clone();
+        let outcome = super::raise(&mut field, 3, 3, &params(64, 1), Some(&features));
+        assert_eq!(
+            outcome,
+            ShapeOutcome::UNCHANGED,
+            "a cascade into an immovable refuses"
+        );
+        assert_eq!(field, before, "the partial cascade was fully rolled back");
+        assert!(
+            field.satisfies_step_invariant(MAX_STEP),
+            "invariant preserved"
+        );
+    }
+
+    #[test]
+    fn lowering_whose_cascade_would_move_an_immovable_is_refused() {
+        // The mirror for `lower`: a rock on a neighbour blocks the second drop.
+        let features = one_immovable(7, 7, 2, 3, Feature::Rock);
+        let mut field = HeightField::flat(7, 7, 5);
+        super::lower(&mut field, 3, 3, &params(64, 1), Some(&features));
+        let before = field.clone();
+        let outcome = super::lower(&mut field, 3, 3, &params(64, 1), Some(&features));
+        assert_eq!(
+            outcome,
+            ShapeOutcome::UNCHANGED,
+            "a lower into an immovable refuses"
+        );
+        assert_eq!(field, before, "rolled back whole");
+    }
+
+    #[test]
+    fn a_cascade_that_avoids_immovables_still_succeeds() {
+        // A tree in the far corner is outside the raise's cone, so the op runs
+        // exactly as it would with no immovables at all.
+        let features = one_immovable(7, 7, 0, 0, Feature::Tree);
+        let mut field = HeightField::flat(7, 7, 0);
+        super::raise(&mut field, 3, 3, &params(64, 1), Some(&features));
+        let outcome = super::raise(&mut field, 3, 3, &params(64, 1), Some(&features));
+        assert_eq!(
+            outcome.moved, 5,
+            "a distant immovable does not block the cascade"
+        );
+        assert_eq!(field.get(3, 3), Some(2));
+        assert_eq!(
+            field.get(0, 0),
+            Some(0),
+            "the far tree's vertex never moved"
+        );
+        assert!(field.satisfies_step_invariant(MAX_STEP));
     }
 }

@@ -227,6 +227,12 @@ pub struct TerrainContent {
     pub shore: ShoreContent,
     /// `content.terrain.mountain.*` — the high-ground band.
     pub mountain: MountainContent,
+    /// `content.terrain.tree.*` — trees, a terrain-owned immovable scattered on
+    /// land (ADR 0017 §5, ADR 0021 §5).
+    pub tree: TreeContent,
+    /// `content.terrain.rock.*` — rock, a terrain-owned immovable scattered on
+    /// mountains.
+    pub rock: RockContent,
 }
 
 /// `content.terrain.shore.*` — the shore band (ADR 0017 §1).
@@ -243,6 +249,23 @@ pub struct MountainContent {
     /// `content.terrain.mountain.min_height` — the height at or above which a
     /// vertex is mountain, taking precedence over the shore band.
     pub min_height: i32,
+}
+
+/// `content.terrain.tree.*` — trees, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeContent {
+    /// `content.terrain.tree.density_permille` — how many of every 1000
+    /// eligible **land** vertices worldgen plants a tree on (0–1000). Seeded,
+    /// so placement is reproducible.
+    pub density_permille: u32,
+}
+
+/// `content.terrain.rock.*` — rock, a terrain-owned immovable (ADR 0021 §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RockContent {
+    /// `content.terrain.rock.density_permille` — how many of every 1000
+    /// eligible **mountain** vertices worldgen sets rock on (0–1000). Seeded.
+    pub density_permille: u32,
 }
 
 /// `render.*` — presentation parameters for the workbench renderer (ADR 0020

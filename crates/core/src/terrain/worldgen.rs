@@ -24,10 +24,12 @@
 
 use alloc::vec::Vec;
 
-use providence_config::{Shape, WorldgenParams};
+use providence_config::{Shape, TerrainContent, WorldgenParams};
 
 use crate::rng::SplitMix64;
 
+use super::derive::{TerrainType, classify_vertex};
+use super::feature::{Feature, FeatureMap};
 use super::field::{Height, HeightField};
 
 /// Fixed-point fractional bits: signals and interpolation weights live in
@@ -59,6 +61,13 @@ const ARCHIPELAGO_MASK_SCALE: u32 = 2; // gate:allow(magic) archipelago mask coa
 const HASH_X: u64 = 0x9E37_79B9_7F4A_7C15; // gate:allow(magic) lattice hash multiplier (x)
 const HASH_Y: u64 = 0xC2B2_AE3D_27D4_EB4F; // gate:allow(magic) lattice hash multiplier (y)
 const HASH_OCTAVE: u64 = 0x1656_67B1_9E37_79F9; // gate:allow(magic) lattice hash multiplier (octave)
+
+/// Salt that separates the feature-placement stream from the terrain-noise
+/// stream, so where a tree lands does not correlate with the ground shape.
+const FEATURE_SALT: u64 = 0xA5A5_5A5A_C3C3_3C3C; // gate:allow(magic) feature-stream salt
+
+/// Per-mille base: densities are per 1000 eligible vertices.
+const PERMILLE: u64 = 1000; // gate:allow(magic) per-mille base
 
 /// Generate a world as an integer [`HeightField`] that already satisfies the
 /// step invariant for `max_step` (ADR 0021).
@@ -96,6 +105,60 @@ pub fn generate(params: &WorldgenParams, max_step: u32) -> HeightField {
         .expect("worldgen builds exactly width × height cells");
     field.conform_to_step_invariant(max_step);
     field
+}
+
+/// Scatter terrain-owned immovables (rock, trees) over a generated `field`,
+/// deterministically from `params.seed` (ADR 0021 §5, realising the ADR 0017 §5
+/// seam). A vertex classified [`TerrainType::Land`] may take a tree and a
+/// [`TerrainType::Mountain`] vertex rock, each with the configured per-mille
+/// probability; water and shore stay bare.
+///
+/// A **pure** function of the seed, the field, and `content` — a separate pass
+/// from [`generate`] so the height golden is untouched — and it reads the same
+/// `content.terrain.*` thresholds the derivations do, so a feature only lands
+/// where its terrain type actually is.
+#[must_use]
+pub fn place_features(
+    field: &HeightField,
+    params: &WorldgenParams,
+    content: &TerrainContent,
+) -> FeatureMap {
+    let (width, height) = (field.width(), field.height());
+    let mut cells: Vec<Option<Feature>> = Vec::with_capacity(width as usize * height as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let vertex_height = field.get(x, y).expect("in-bounds cell is readable");
+            let kind = classify_vertex(
+                vertex_height,
+                params.sea_level,
+                content.shore.band,
+                content.mountain.min_height,
+            );
+            let feature = match kind {
+                TerrainType::Land if places(params.seed, x, y, content.tree.density_permille) => {
+                    Some(Feature::Tree)
+                }
+                TerrainType::Mountain
+                    if places(params.seed, x, y, content.rock.density_permille) =>
+                {
+                    Some(Feature::Rock)
+                }
+                _ => None,
+            };
+            cells.push(feature);
+        }
+    }
+    FeatureMap::from_cells(width, height, cells).expect("placement builds exactly width × height")
+}
+
+/// Whether an eligible vertex `(x, y)` takes a feature at `density_permille`
+/// (per 1000), drawn deterministically from `seed` on a stream salted apart
+/// from the terrain noise.
+fn places(seed: u64, x: u32, y: u32, density_permille: u32) -> bool {
+    let mixed =
+        seed ^ FEATURE_SALT ^ u64::from(x).wrapping_mul(HASH_X) ^ u64::from(y).wrapping_mul(HASH_Y);
+    let draw = SplitMix64::new(mixed).next_u64() % PERMILLE;
+    draw < u64::from(density_permille)
 }
 
 /// Summed multi-octave value noise at `(x, y)`, in `[0, ONE)`. Each octave

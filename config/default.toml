@@ -81,6 +81,16 @@ band = 2
 # as mountain rather than ordinary land.
 min_height = 9
 
+# Terrain-owned immovables (ADR 0017 §5, ADR 0021 §5): worldgen scatters these
+# deterministically, and a raise/lower whose cascade would disturb one is
+# refused (no silent destruction). density_permille = features per 1000 eligible
+# vertices (trees on land, rock on mountains).
+[content.terrain.tree]
+density_permille = 120   # trees per 1000 land vertices
+
+[content.terrain.rock]
+density_permille = 200   # rock per 1000 mountain vertices
+
 # --- Presentation (docs/40-parameterisation.md §2.2, ADR 0020) ---
 # render.* is the workbench renderer's config. It is NON-deterministic and sits
 # OUTSIDE the determinism boundary: the loader projects it into a standalone

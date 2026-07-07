@@ -47,8 +47,8 @@ impl Session {
 mod tests {
     use providence_config::{
         ContentParams, EconomyParams, ManaMode, ManaParams, MountainContent, OpponentParams,
-        Params, PlaceholderParams, RaiseParams, Shape, ShoreContent, SimParams, TerrainContent,
-        TerrainParams, WinLossParams, WorldgenParams,
+        Params, PlaceholderParams, RaiseParams, RockContent, Shape, ShoreContent, SimParams,
+        TerrainContent, TerrainParams, TreeContent, WinLossParams, WorldgenParams,
     };
 
     use super::Session;
@@ -85,6 +85,12 @@ mod tests {
                 terrain: TerrainContent {
                     shore: ShoreContent { band: 2 },
                     mountain: MountainContent { min_height: 12 },
+                    tree: TreeContent {
+                        density_permille: 120,
+                    },
+                    rock: RockContent {
+                        density_permille: 200,
+                    },
                 },
             },
         }

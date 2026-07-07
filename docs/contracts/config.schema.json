@@ -27,6 +27,23 @@
                 "min_height"
               ]
             },
+            "rock": {
+              "description": "`content.terrain.rock.*` — rock (terrain-owned immovable).",
+              "type": "object",
+              "properties": {
+                "density_permille": {
+                  "description": "`content.terrain.rock.density_permille` — rock per 1000 eligible\nmountain vertices. Bounded by the per-mille base.",
+                  "type": "integer",
+                  "format": "uint32",
+                  "maximum": 1000,
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "density_permille"
+              ]
+            },
             "shore": {
               "description": "`content.terrain.shore.*` — the coastal band.",
               "type": "object",
@@ -42,12 +59,31 @@
               "required": [
                 "band"
               ]
+            },
+            "tree": {
+              "description": "`content.terrain.tree.*` — trees (terrain-owned immovable).",
+              "type": "object",
+              "properties": {
+                "density_permille": {
+                  "description": "`content.terrain.tree.density_permille` — trees per 1000 eligible land\nvertices. A probability, so it is bounded by the per-mille base.",
+                  "type": "integer",
+                  "format": "uint32",
+                  "maximum": 1000,
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "density_permille"
+              ]
             }
           },
           "additionalProperties": false,
           "required": [
             "shore",
-            "mountain"
+            "mountain",
+            "tree",
+            "rock"
           ]
         }
       },

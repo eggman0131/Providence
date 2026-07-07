@@ -227,7 +227,9 @@ mod tests {
         [sim.terrain.raise]\nmana_cost = 1\n\n\
         [sim.placeholder]\ntick_increment = 1\n\n\
         [content.terrain.shore]\nband = 2\n\n\
-        [content.terrain.mountain]\nmin_height = 12\n";
+        [content.terrain.mountain]\nmin_height = 12\n\n\
+        [content.terrain.tree]\ndensity_permille = 120\n\n\
+        [content.terrain.rock]\ndensity_permille = 200\n";
 
     /// A complete governed default layer: every subsystem present and on,
     /// mana metered (mirrors the shipped `config/default.toml`).
