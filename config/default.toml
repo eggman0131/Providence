@@ -28,6 +28,21 @@ mode = "normal"
 # false => no win/loss evaluation during free play.
 enabled = true
 
+# Terrain: the integer vertex height field (ADR 0017). The foundation the game
+# is built on (foundation-first, ADR 0019) — always on, so no `enabled` seam.
+[sim.terrain]
+# Max height difference between two orthogonally-adjacent vertices (the step
+# invariant). Structural: the model, mesh, and cascade assume 1; a value != 1
+# is not a supported/tested map (ADR 0017).
+max_step = 1
+# World height ceiling a raise cannot exceed; also bounds the cascade radius.
+max_height = 64
+
+[sim.terrain.raise]
+# Mana charged per vertex actually MOVED by a raise/lower. Wired now; the
+# economy is parked, so it is computed and returned but not yet spent.
+mana_cost = 1
+
 [sim.placeholder]
 # Phase-1 gate scaffolding (contract §7.2): proves the config -> core wiring
 # end-to-end. Deleted when the Phase-3 core consumes real subsystem state.

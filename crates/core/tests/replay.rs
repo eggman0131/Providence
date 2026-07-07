@@ -5,8 +5,8 @@
 //! hash. The golden changes only on an intentional, reviewed core change.
 
 use providence_config::{
-    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, SimParams,
-    WinLossParams,
+    EconomyParams, ManaMode, ManaParams, OpponentParams, Params, PlaceholderParams, RaiseParams,
+    SimParams, TerrainParams, WinLossParams,
 };
 use providence_core::hash::Fnv1a64;
 use providence_core::rng::SplitMix64;
@@ -30,6 +30,11 @@ fn fixture_params() -> Params {
                 },
             },
             winloss: WinLossParams { enabled: true },
+            terrain: TerrainParams {
+                max_step: 1,
+                max_height: 64,
+                raise: RaiseParams { mana_cost: 1 },
+            },
             placeholder: PlaceholderParams { tick_increment: 1 },
         },
     }

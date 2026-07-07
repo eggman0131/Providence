@@ -175,6 +175,8 @@ mod tests {
                  [sim.opponent]\nenabled = true\n\n\
                  [sim.economy.mana]\nmode = \"normal\"\n\n\
                  [sim.winloss]\nenabled = true\n\n\
+                 [sim.terrain]\nmax_step = 1\nmax_height = 64\n\n\
+                 [sim.terrain.raise]\nmana_cost = 1\n\n\
                  [sim.placeholder]\ntick_increment = 1\n"
             ),
         }
@@ -288,6 +290,8 @@ mod tests {
                  [sim.opponent]\nenabled = true\n\n\
                  [sim.economy.mana]\nmode = \"normal\"\n\n\
                  [sim.winloss]\nenabled = true\n\n\
+                 [sim.terrain]\nmax_step = 1\nmax_height = 64\n\n\
+                 [sim.terrain.raise]\nmana_cost = 1\n\n\
                  [sim.placeholder]\ntick_increment = 1\n"
                 .into(),
         };

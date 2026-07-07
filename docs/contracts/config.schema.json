@@ -94,6 +94,46 @@
             "tick_increment"
           ]
         },
+        "terrain": {
+          "description": "`sim.terrain.*` — the vertex height-field subsystem (ADR 0017).",
+          "type": "object",
+          "properties": {
+            "max_height": {
+              "description": "`sim.terrain.max_height` — the world height ceiling a raise cannot\nexceed; bounds the cascade radius (ADR 0017 §3).",
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            },
+            "max_step": {
+              "description": "`sim.terrain.max_step` — maximum orthogonal height step; the step\ninvariant (ADR 0017 §2). Structural: the model assumes 1.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 1
+            },
+            "raise": {
+              "description": "`sim.terrain.raise.*` — the raise/lower shaping operation.",
+              "type": "object",
+              "properties": {
+                "mana_cost": {
+                  "description": "`sim.terrain.raise.mana_cost` — mana per vertex actually moved\n(ADR 0017 §3). Any value is valid (0 = free shaping in exploration).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "mana_cost"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "max_step",
+            "max_height",
+            "raise"
+          ]
+        },
         "winloss": {
           "description": "`sim.winloss.*` — the win/loss evaluation subsystem.",
           "type": "object",
@@ -114,6 +154,7 @@
         "opponent",
         "economy",
         "winloss",
+        "terrain",
         "placeholder"
       ]
     }

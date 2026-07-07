@@ -24,7 +24,7 @@ The project is **parameterised from day one**: behaviour, balance, and content a
 
 ```
 sim.economy.mana.regen_rate
-sim.worldgen.terrain.max_height
+sim.terrain.max_height
 sim.population.follower.growth_per_tick
 ai.llm.decision.cadence_ticks
 ai.difficulty.strategy_trust
@@ -60,7 +60,7 @@ meta.schema_version
 What lives where (illustrative, not exhaustive; every gameplay number ends up under one of these):
 
 - **`sim.worldgen.*`** — map size, seed handling, terrain generation rates, sea level, initial settlement placement.
-- **`sim.terrain.*`** — land-shaping costs/limits; the step invariant `max_step` (default 1) and `max_height`/`min_height`; water spread. The vertex height-field model these govern is fixed by [ADR 0017](./decisions/0017-vertex-heightfield-terrain.md); `max_step`/`max_height` are structural (load-time, not hot-reloadable).
+- **`sim.terrain.*`** — the vertex height-field subsystem, model fixed by [ADR 0017](./decisions/0017-vertex-heightfield-terrain.md). **Created with the terrain core** (issue #6): the step invariant `max_step` (default 1), the height ceiling `max_height`, and the shaping cost `raise.mana_cost`; `max_step`/`max_height` are structural (load-time, not hot-reloadable). Still design intent, added with the subsystems that read them: `min_height`/sea floor (worldgen, #7) and water spread.
 - **`sim.economy.*`** — faith/mana regeneration, storage caps, spend rules, worship yield per follower.
 - **`sim.population.*`** — follower growth, housing capacity, migration, allegiance/conversion rates.
 - **`sim.rules.*`** — tick length, action ordering, per-turn limits.
@@ -116,9 +116,9 @@ The parameter layer is organised so that **one knob cannot leak into another sub
 
 ### 7.1 The `sim.<subsystem>.enabled` seam
 
-7.1.1 Every major simulation subsystem is a **disjoint subtree** under `sim.*` (`sim.opponent.*`, `sim.economy.*`, `sim.winloss.*`, and every future peer). No subsystem's parameters are derived from another's; cross-subsystem influence flows only through explicit seams where a subsystem reads its **own** state/budget, never through shared coupling.
+7.1.1 Every major simulation subsystem is a **disjoint subtree** under `sim.*` (`sim.opponent.*`, `sim.economy.*`, `sim.winloss.*`, `sim.terrain.*`, and every future peer). No subsystem's parameters are derived from another's; cross-subsystem influence flows only through explicit seams where a subsystem reads its **own** state/budget, never through shared coupling.
 
-7.1.2 Every toggleable subsystem carries an on/off seam named **`sim.<subsystem>.enabled`** (a `bool`). Disabling one subsystem must **not** break the build or the remaining subsystems — the loop still runs; the disabled subsystem simply does nothing. Reserved seams today:
+7.1.2 Every toggleable subsystem carries an on/off seam named **`sim.<subsystem>.enabled`** (a `bool`). Disabling one subsystem must **not** break the build or the remaining subsystems — the loop still runs; the disabled subsystem simply does nothing. Not every subsystem is toggleable: **`sim.terrain.*`** is the always-on foundation (nothing runs without land) and **`sim.economy.*`** exposes a `mode` instead — an "off" is not a use-case for either, so they carry no `enabled` seam. Reserved seams today:
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -126,7 +126,7 @@ The parameter layer is organised so that **one knob cannot leak into another sub
 | `sim.economy.mana.mode` | `normal` \| `fast` \| `unlimited` | First-class mana generation mode; `unlimited` is god-mode, not a hack. The economy's control knob (its "off" is not a sandbox use-case, so it exposes `mode` rather than `enabled`). |
 | `sim.winloss.enabled` | `bool` | `false` ⇒ no win/loss evaluation during free play. |
 
-New subsystems follow the same convention. *(A future gate check may assert that every `sim.*` subsystem exposes an `enabled` switch — deferred until more subsystems exist, per ADR 0016.)*
+New subsystems follow the same convention. *(A future gate check may assert that every **toggleable** `sim.*` subsystem exposes an `enabled` switch, with the documented always-on/`mode` exceptions above — deferred until more subsystems exist, per ADR 0016.)*
 
 ### 7.2 The `sandbox` exploration profile
 
