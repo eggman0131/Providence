@@ -3,7 +3,9 @@
 //!
 //! Subcommands (dev tooling — the real game loop lands in later phases):
 //! - *(none)* — a smoke run proving the config → params → session pipeline,
-//!   plus a textual terrain demo (issue #6 §5).
+//!   plus a textual terrain demo (issue #6 §5) and the interactive command seam
+//!   (ADR 0022): a [`WorkbenchSession`] sculpts the generated world through the
+//!   [`SimDriver`] port and prints a before/after census.
 //! - `workbench` — open the on-screen 3D terrain workbench (issue #8, ADR 0020):
 //!   a lit height field the Director can orbit / pan / zoom. Needs a display.
 //! - `capture [PATH [YAW PITCH DISTANCE]]` — render the same scene headlessly to
@@ -21,11 +23,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use providence_app::WorkbenchSession;
 use providence_config::{Params, RenderParams, TerrainParams};
 use providence_core::terrain::{
     Feature, FeatureMap, HeightField, TerrainType, classify_vertex, generate, place_features, raise,
 };
-use providence_ports::{RendererPort, TerrainFrame};
+use providence_ports::{RendererPort, SimDriver, TerrainCommand, TerrainFrame};
 use providence_renderer::{HeadlessRenderer, NoopRenderer, OrbitController, WindowRenderer};
 
 /// Fixed demo values for the smoke run — not behavioural config (the smoke
@@ -115,6 +118,8 @@ fn smoke_run() -> ExitCode {
     };
     present_demo_frame(&field, &render);
 
+    run_shaping_smoke(&params);
+
     let mut session = providence_app::Session::new(params, SMOKE_SEED);
     for _ in 0..SMOKE_STEPS {
         session.advance();
@@ -126,6 +131,112 @@ fn smoke_run() -> ExitCode {
         SMOKE_STEPS
     );
     ExitCode::SUCCESS
+}
+
+/// Prove the interactive command seam end-to-end (ADR 0022): build a
+/// [`WorkbenchSession`] over the generated world, submit a short scripted sculpt
+/// through the [`SimDriver`] port, and print a before/after terrain census — so
+/// config → worldgen → session → apply → snapshot is *observed* working, not
+/// merely asserted (contract §3). The sculpt raises a flat sea patch (never
+/// refused — water carries no immovables), turning open water into a small
+/// stepped island, then reverses one step.
+fn run_shaping_smoke(params: &Params) {
+    let mut session = WorkbenchSession::new(params);
+    let (width, height) = (session.width(), session.height());
+    println!(
+        "providence: interactive seam (ADR 0022) — shaping a {width}×{height} generated world:"
+    );
+    println!(
+        "  before: {}",
+        census_line(session.heights(), width, height, params)
+    );
+
+    let Some((sx, sy)) = flat_sea_patch(
+        session.heights(),
+        width,
+        height,
+        params.sim.worldgen.sea_level,
+    ) else {
+        println!("  (no open-sea patch to sculpt — skipping the shaping demo)");
+        return;
+    };
+
+    // Three raises grow a stepped cone out of the sea; one lower reverses a step.
+    // Each is a discrete, recorded TerrainCommand through the SimDriver port.
+    let sculpt = [
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Lower { x: sx, y: sy },
+    ];
+    for command in sculpt {
+        session.submit(command);
+    }
+
+    println!(
+        "  after:  {}",
+        census_line(session.heights(), width, height, params)
+    );
+    println!(
+        "  sculpted vertex ({sx}, {sy}); submitted {n} commands \
+         → tick {tick}, revision {revision}, {logged} logged \
+         (a session is seed + params + log, replayable bit-for-bit)",
+        n = sculpt.len(),
+        tick = session.tick(),
+        revision = session.revision(),
+        logged = session.log().len(),
+    );
+}
+
+/// A one-line terrain-type census of a row-major height snapshot: how the
+/// heights classify into water / shore / land / mountain (ADR 0017 §1) plus the
+/// height range and the step invariant — the honest textual observation for the
+/// shaping smoke run.
+fn census_line(heights: &[i32], width: u32, height: u32, params: &Params) -> String {
+    let worldgen = &params.sim.worldgen;
+    let terrain = &params.content.terrain;
+    let (mut water, mut shore, mut land, mut mountain) = (0_u32, 0_u32, 0_u32, 0_u32);
+    let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
+    for &h in heights {
+        lowest = lowest.min(h);
+        highest = highest.max(h);
+        match classify_vertex(
+            h,
+            worldgen.sea_level,
+            terrain.shore.band,
+            terrain.mountain.min_height,
+        ) {
+            TerrainType::Water => water += 1,
+            TerrainType::Shore => shore += 1,
+            TerrainType::Land => land += 1,
+            TerrainType::Mountain => mountain += 1,
+        }
+    }
+    let dry = shore + land + mountain;
+    let total = width * height;
+    format!(
+        "water {water}, shore {shore}, land {land}, mountain {mountain} \
+         ({dry}/{total} dry); heights {lowest}..={highest}"
+    )
+}
+
+/// The first interior vertex whose height and all four orthogonal neighbours sit
+/// exactly at `sea_level` — a flat patch of sea floor to sculpt (worldgen pins
+/// water flat at the datum, ADR 0021). Row-major over the snapshot; `None` if
+/// the world has no such patch.
+fn flat_sea_patch(heights: &[i32], width: u32, height: u32, sea_level: i32) -> Option<(u32, u32)> {
+    let at = |x: u32, y: u32| heights.get((y * width + x) as usize).copied();
+    for y in 1..height.saturating_sub(1) {
+        for x in 1..width.saturating_sub(1) {
+            let flat = [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                .iter()
+                .all(|&(nx, ny)| at(nx, ny) == Some(sea_level));
+            if flat {
+                return Some((x, y));
+            }
+        }
+    }
+    None
 }
 
 /// Open the on-screen 3D workbench (issue #8 Phase 1). Builds the workbench

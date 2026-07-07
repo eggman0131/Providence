@@ -1692,6 +1692,7 @@ name = "providence-core"
 version = "0.1.0"
 dependencies = [
  "providence-config",
+ "providence-ports",
 ]
 
 [[package]]

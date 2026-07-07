@@ -5,10 +5,14 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The core imports ONLY config-layer data types (docs/20-architecture.md §5
-# rule 1); the boundary checker fails the gate on anything else.
+# The core imports config-layer data types plus the ports crate for the
+# `TerrainCommand` DTO it consumes (docs/20-architecture.md §5 rule 1, ADR 0022
+# §2); the boundary checker fails the gate on anything else. `providence-ports`
+# is a zero-external-dep `no_std` leaf, so this edge keeps the core `no_std` and
+# external-dependency-free and cannot form a cycle.
 [dependencies]
 providence-config = { workspace = true }
+providence-ports = { workspace = true }
 
 [lints]
 workspace = true

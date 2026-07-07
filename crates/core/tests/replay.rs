@@ -20,7 +20,10 @@ use providence_config::{
 use providence_core::hash::Fnv1a64;
 use providence_core::rng::SplitMix64;
 use providence_core::state::{State, step};
-use providence_core::terrain::{Feature, HeightField, generate, lower, place_features, raise};
+use providence_core::terrain::{
+    Feature, FeatureMap, HeightField, World, generate, lower, place_features, raise,
+};
+use providence_ports::TerrainCommand;
 
 const SEED: u64 = 0xD1CE;
 const STEPS: u64 = 1_000;
@@ -354,5 +357,166 @@ fn feature_placement_matches_committed_golden() {
         GOLDEN_FEATURES,
         "feature placement diverged from the committed golden; if intentional, \
          update GOLDEN_FEATURES and say so in the PR"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Recorded terrain-command session determinism (issues #9/#10, ADR 0022).
+//
+// A live, mutating sim must still replay bit-for-bit (I3). A World generated
+// from a fixed seed + params, driven through World::apply by a fixed
+// TerrainCommand script (a scripted sculpt), fingerprints its heights + the
+// vertices moved after each command to GOLDEN_COMMAND_SESSION — the concrete
+// I3 coverage for the interactive shaping seam (issue #10's deliverable). The
+// script deliberately targets an immovable vertex, so the refuse-and-roll-back
+// path (ADR 0017 §5) is part of the recorded, replayed history.
+// ---------------------------------------------------------------------------
+
+/// Committed golden fingerprint of the recorded command session
+/// ([`command_session_script`] over [`worldgen_fixture`] + [`content_fixture`]).
+/// Like [`GOLDEN`], recompute this ONLY for an intentional change to worldgen,
+/// placement, the cascade, or the command-apply path — and call it out in the PR.
+const GOLDEN_COMMAND_SESSION: u64 = 0x4F24_91F7_6C9F_DEEB;
+
+/// Terrain params for the session golden: the shipped unit step, a ceiling high
+/// enough that the centre cone grows over the island's relief, unit cost so
+/// `moved` and `cost` track one-to-one.
+fn command_session_terrain() -> TerrainParams {
+    TerrainParams {
+        max_step: 1,
+        max_height: 32,
+        raise: RaiseParams { mana_cost: 1 },
+    }
+}
+
+/// The first immovable vertex in `features`, row-major — a deterministic pick
+/// (same seed ⇒ same placement) the script targets so the refusal path fires.
+fn first_immovable(features: &FeatureMap) -> Option<(u32, u32)> {
+    for y in 0..features.height() {
+        for x in 0..features.width() {
+            if features.is_immovable(x, y) {
+                return Some((x, y));
+            }
+        }
+    }
+    None
+}
+
+/// The first interior vertex whose height *and* all four orthogonal neighbours
+/// sit exactly at `sea_level` — a flat patch of sea floor (worldgen pins water
+/// flat at the datum, ADR 0021). Row-major and deterministic. Sculpting here
+/// behaves exactly like flat ground (predictable cascade) and can never be
+/// refused: water carries no immovables (ADR 0017 §5).
+fn flat_sea_patch(field: &HeightField, sea_level: i32) -> Option<(u32, u32)> {
+    for y in 1..field.height().saturating_sub(1) {
+        for x in 1..field.width().saturating_sub(1) {
+            let flat = [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                .iter()
+                .all(|&(nx, ny)| field.get(nx, ny) == Some(sea_level));
+            if flat {
+                return Some((x, y));
+            }
+        }
+    }
+    None
+}
+
+/// The scripted sculpt over the fixture world: three raises on a flat sea patch
+/// grow a stepped cone, two lowers reverse part of it, then a raise/lower on a
+/// known immovable vertex is refused (moved 0) — so the fingerprint covers a
+/// real cascade *and* the roll-back path (ADR 0017 §5). A fixed, deterministic
+/// sequence (same seed ⇒ same field + placement ⇒ same script).
+fn command_session_script(
+    field: &HeightField,
+    features: &FeatureMap,
+    sea_level: i32,
+) -> Vec<TerrainCommand> {
+    let (sx, sy) = flat_sea_patch(field, sea_level).expect("the island fixture has open sea");
+    let mut script = vec![
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Raise { x: sx, y: sy },
+        TerrainCommand::Lower { x: sx, y: sy },
+        TerrainCommand::Lower { x: sx + 1, y: sy },
+    ];
+    if let Some((ix, iy)) = first_immovable(features) {
+        script.push(TerrainCommand::Raise { x: ix, y: iy });
+        script.push(TerrainCommand::Lower { x: ix, y: iy });
+    }
+    script
+}
+
+/// Fingerprint the whole field (row-major heights) plus the `moved` count after
+/// each command in the scripted session — the command-seam analogue of the
+/// shaping-history fingerprint.
+fn command_session_fingerprint() -> u64 {
+    let worldgen = worldgen_fixture();
+    let terrain = command_session_terrain();
+    let field = generate(&worldgen, WORLDGEN_MAX_STEP);
+    let features = place_features(&field, &worldgen, &content_fixture());
+    let script = command_session_script(&field, &features, worldgen.sea_level);
+    let mut world = World::new(field, Some(features));
+
+    let mut hasher = Fnv1a64::new();
+    for command in script {
+        let outcome = world.apply(&terrain, command);
+        hasher.write_u64(u64::from(outcome.moved));
+        for gy in 0..world.height() {
+            for gx in 0..world.width() {
+                let cell = world
+                    .field()
+                    .get(gx, gy)
+                    .expect("in-bounds cell is readable");
+                // Fixed little-endian bit pattern of the signed height — stable
+                // across platforms, no lossy cast (mirrors the terrain golden).
+                hasher.write_u64(u64::from(u32::from_le_bytes(cell.to_le_bytes())));
+            }
+        }
+    }
+    hasher.finish()
+}
+
+#[test]
+fn command_session_is_deterministic() {
+    assert_eq!(
+        command_session_fingerprint(),
+        command_session_fingerprint(),
+        "two runs of the same recorded command session diverged (I3 violation)"
+    );
+}
+
+#[test]
+fn command_session_matches_committed_golden() {
+    assert_eq!(
+        command_session_fingerprint(),
+        GOLDEN_COMMAND_SESSION,
+        "the recorded command session diverged from the committed golden; if this \
+         change to worldgen/placement/cascade/apply is intentional, update \
+         GOLDEN_COMMAND_SESSION and say so in the PR"
+    );
+}
+
+#[test]
+fn command_session_exercises_immovable_refusal() {
+    // Guards the intent of the script: the fixture world *has* immovables and
+    // the session actually targets one, so the refuse-and-roll-back path is
+    // covered (not silently skipped if placement shifts). A raise on the first
+    // immovable moves nothing and leaves the field untouched (ADR 0017 §5).
+    let worldgen = worldgen_fixture();
+    let field = generate(&worldgen, WORLDGEN_MAX_STEP);
+    let features = place_features(&field, &worldgen, &content_fixture());
+    let (ix, iy) = first_immovable(&features).expect("the dense fixture places immovables");
+
+    let mut world = World::new(field, Some(features));
+    let before = world.field().clone();
+    let outcome = world.apply(
+        &command_session_terrain(),
+        TerrainCommand::Raise { x: ix, y: iy },
+    );
+    assert_eq!(outcome.moved, 0, "raising an immovable vertex is refused");
+    assert_eq!(
+        world.field(),
+        &before,
+        "the refused op leaves the field untouched"
     );
 }

@@ -81,6 +81,15 @@ impl HeightField {
         self.height
     }
 
+    /// The backing row-major height buffer (`width × height`, the vertex at
+    /// `(x, y)` at `y * width + x`) — the snapshot a [`super::World`] and, in
+    /// turn, a renderer read without copying (ADR 0022 §3). Read-only: the
+    /// shaping ops in [`super::shape`] stay the only writers.
+    #[must_use]
+    pub fn heights(&self) -> &[Height] {
+        &self.cells
+    }
+
     /// The height at `(x, y)`, or `None` if the coordinate is out of bounds.
     #[must_use]
     pub fn get(&self, x: u32, y: u32) -> Option<Height> {
@@ -236,6 +245,16 @@ mod tests {
         assert_eq!(field.get(1, 0), Some(1));
         assert_eq!(field.get(0, 1), Some(1));
         assert_eq!(field.get(1, 1), Some(2));
+    }
+
+    #[test]
+    fn heights_exposes_the_row_major_buffer() {
+        let field = HeightField::from_cells(2, 2, vec![0, 1, 1, 2]).unwrap();
+        assert_eq!(
+            field.heights(),
+            &[0, 1, 1, 2],
+            "heights borrows the row-major cells verbatim"
+        );
     }
 
     #[test]
