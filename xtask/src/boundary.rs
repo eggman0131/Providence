@@ -15,8 +15,13 @@ use std::fs;
 /// architectural change → ADR (contract §5).
 fn allowed_edges() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
     let mut allowed = BTreeMap::new();
-    // The core imports ONLY config-layer data types (§5 rule 1).
-    allowed.insert("providence-core", BTreeSet::from(["providence-config"]));
+    // The core imports config-layer data types plus the ports crate for the
+    // `TerrainCommand` DTO it consumes (§5 rule 1, ADR 0022 §2). `providence-ports`
+    // is a zero-dep leaf (below), so this edge cannot form a cycle.
+    allowed.insert(
+        "providence-core",
+        BTreeSet::from(["providence-config", "providence-ports"]),
+    );
     // Config and ports are leaves: plain data / trait interfaces.
     allowed.insert("providence-config", BTreeSet::new());
     allowed.insert("providence-ports", BTreeSet::new());

@@ -81,7 +81,8 @@ Interfaces the application/core depend on, each with real adapter(s) **and** a t
 |---|---|---|
 | `LLMOpponentPort` | Get the rival deity's strategy from an observation. | local-LLM adapter (`llm-ollama`: Ollama over loopback, [ADR 0014](./decisions/0014-ollama-local-llm-runtime.md)); scripted/mock adapter (tests). See [`50-llm-opponent.md`](./50-llm-opponent.md). |
 | `RendererPort` | Present a derived **`TerrainFrame`** snapshot (grid dims + row-major heights; no simulation or camera/view state — [ADR 0020](./decisions/0020-workbench-runtime-and-rendererport.md)). The camera is adapter-local view state and never crosses the boundary. | on-screen renderer (`wgpu`/Metal, [ADR 0007](./decisions/0007-wgpu-rendering-framework.md)); headless render-to-PNG (agent visual self-check); no-op test double. |
-| `InputPort` | Receive human player intent. | device/UI adapter; scripted input (tests). |
+| `SimDriver` | The interactive seam ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)): the renderer *holds* one to `submit` a discrete **`TerrainCommand`** (`Raise`/`Lower` at integer grid coords) and pull the current snapshot (`width`/`height`/`heights`/`revision`) to draw. Sits alongside `RendererPort`, which is unchanged. | app `WorkbenchSession` (owns the core `World` + recorded command log); the static renderer adapters do not implement it. |
+| `InputPort` | Receive human player intent. Concretely realised as `SimDriver::submit(TerrainCommand)` — input reaches the sim *only* as a discrete, recorded command ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)), so a live session still replays bit-for-bit. | device/UI adapter → `TerrainCommand`; scripted input (tests). |
 | `PersistencePort` | Save/load sessions & snapshots. | local-storage adapter; in-memory (tests). |
 | `ClockRandomPort` | Time and randomness *at the edge*; supplies **seeded** RNG streams to the core. | real clock + seeded RNG; fixed-seed/fixed-time (tests). |
 | `ConfigPort` | Load & validate configuration into immutable params. | layered-TOML loader + types-first validator (`serde`/`garde`, [ADR 0008](./decisions/0008-toml-config-format-types-first-schema.md)); in-memory fixture (tests). |
@@ -121,7 +122,23 @@ Everything **inside** the core + config is deterministic. Everything **outside**
 
 Steps 6–9 are fully deterministic and independently testable with test doubles for every port (invariant I5).
 
-**Real-time workbench refinement ([ADR 0020](./decisions/0020-workbench-runtime-and-rendererport.md)).** The push in step 10 is the *headless/batch* shape. In the interactive workbench the renderer adapter owns the `winit` event loop — the window drives redraws — so `RendererPort` is called *by* the loop with the current `TerrainFrame`, not from an app-owned `for` loop. The camera moves entirely inside the adapter and never crosses the determinism boundary, so this real-time view does not weaken I3. The fixed-timestep loop that reconciles a live sim with a variable frame rate lands with issue #10.
+**Real-time workbench refinement ([ADR 0020](./decisions/0020-workbench-runtime-and-rendererport.md)).** The push in step 10 is the *headless/batch* shape. In the interactive workbench the renderer adapter owns the `winit` event loop — the window drives redraws — so `RendererPort` is called *by* the loop with the current `TerrainFrame`, not from an app-owned `for` loop. The camera moves entirely inside the adapter and never crosses the determinism boundary, so this real-time view does not weaken I3.
+
+**Interactive submit/pull flow ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)).** Alongside that batch push, the live shaping path runs through the `SimDriver` port the renderer *holds*:
+
+```
+a. Input (a click/drag) is mapped, at the renderer edge, to a discrete TerrainCommand
+   (integer grid coords — the float/ray work stays adapter-local).
+b. Renderer calls SimDriver.submit(command) ──► app WorkbenchSession.
+c. Session APPLIES it: World.apply(params, command) → the bounded raise/lower cascade   [deterministic]
+   (immovable-refusal and all), RECORDS (tick, command) in the log, and advances one tick.
+d. Renderer PULLS the fresh snapshot (width/height/heights) to draw; `revision` bumps
+   only when the heights actually changed, telling the renderer to animate.
+e. Replay re-applies the recorded (tick, command) log to a fresh World from the same
+   seed + params, stepping tick-by-tick, and reproduces the field bit-for-bit (I3).
+```
+
+Steps b–c are the concrete `InputPort` (§2.4): input reaches the sim *only* as a recorded command, and no wall-clock, float, or frame-rate value ever enters the core — so a live, mutating sim stays replayable. When a future subsystem needs per-tick background evolution, a wall-clock-*paced* accumulator can decide *when* to step in the renderer loop, never *what* a step computes (ADR 0022 §5).
 
 ---
 
@@ -129,10 +146,10 @@ Steps 6–9 are fully deterministic and independently testable with test doubles
 
 Per I2/I4 these are checked by tooling (the dependency/boundary checker in the gate), not left to discipline:
 
-1. **Core imports only config-layer data types.** It must not import application, ports, or adapters. Violations fail the gate.
-2. **Application imports core + port interfaces**, never a concrete adapter (adapters are injected at the composition root).
+1. **Core imports config-layer data types and the ports crate's plain-data DTOs.** It reads validated config and — since [ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md) — consumes the `TerrainCommand` DTO from `ports` (a plain value it dispatches, never a trait it calls outward). It must not import the application or any adapter. Because `ports` is a zero-dependency leaf, this inward-only `core → ports` edge cannot form a cycle. Violations fail the gate.
+2. **Application imports core + port interfaces**, never a concrete adapter (adapters are injected at the composition root). It *implements* port interfaces too — e.g. the `SimDriver` interactive seam ([ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)).
 3. **Adapters import port interfaces** (to implement) and external libs; adapters must not import each other.
 4. **No cycles** anywhere in the module graph.
 5. **New ports and new namespace roots are architectural changes** → require an ADR (contract §5).
 
-The concrete module layout realises the graph above as a **Rust Cargo workspace** ([ADR 0006](./decisions/0006-rust-language-and-runtime.md)): `core` (zero-dependency, `no_std` + alloc, pure — [ADR 0009](./decisions/0009-enforcement-tooling-and-the-gate.md)) · `config` · `ports` (trait interfaces) · `app` (orchestration) · `adapters/*` (one crate per adapter) · a thin composition-root binary. Because `core` names no other project crate in its `Cargo.toml`, an illegal inward-violating import fails to compile — the rules above are enforced by the crate graph plus the boundary checker, not by convention.
+The concrete module layout realises the graph above as a **Rust Cargo workspace** ([ADR 0006](./decisions/0006-rust-language-and-runtime.md)): `core` (zero *external* dependency — config data + the ports `TerrainCommand` DTO only, `no_std` + alloc, pure — [ADR 0009](./decisions/0009-enforcement-tooling-and-the-gate.md), [ADR 0022](./decisions/0022-interactive-shaping-seam-input-command-simdriver.md)) · `config` · `ports` (trait interfaces + the DTOs they hand across) · `app` (orchestration) · `adapters/*` (one crate per adapter) · a thin composition-root binary. Because `core` names only inward crates in its `Cargo.toml`, an illegal outward import fails to compile — the rules above are enforced by the crate graph plus the boundary checker, not by convention.

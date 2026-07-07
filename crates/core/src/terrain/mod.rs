@@ -15,15 +15,24 @@
 //! ([`worldgen`]); Phase 3 realises the immovable-feature seam (ADR 0017 §5) —
 //! terrain-owned immovables ([`feature`]) placed by worldgen, which the shaping
 //! ops refuse to disturb.
+//!
+//! Issues #9/#10 add the interactive command seam ([ADR 0022](../../../docs/decisions/0022-interactive-shaping-seam-input-command-simdriver.md)):
+//! a [`World`] bundles the field and its immovables and consumes a discrete,
+//! recorded [`providence_ports::TerrainCommand`] via [`World::apply`], the core
+//! side of the [`SimDriver`](providence_ports::SimDriver) port a live session
+//! drives — so shaping the land stays deterministic (fixed integer commands, no
+//! wall-clock) even as it happens in real time.
 
 mod derive;
 mod feature;
 mod field;
 mod shape;
+mod world;
 mod worldgen;
 
 pub use derive::{TerrainType, classify_vertex, is_buildable_face};
 pub use feature::{Feature, FeatureMap};
 pub use field::{Height, HeightField};
 pub use shape::{ShapeOutcome, lower, raise};
+pub use world::World;
 pub use worldgen::{generate, place_features};
