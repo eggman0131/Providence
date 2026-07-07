@@ -285,7 +285,12 @@ fn run_workbench() -> ExitCode {
     // Seed the initial frame from the session snapshot; `present` is unchanged
     // (ADR 0022 §4). The borrow ends before the session is handed to `run`.
     {
-        let frame = TerrainFrame::new(session.width(), session.height(), session.heights());
+        let frame = TerrainFrame::new(
+            session.width(),
+            session.height(),
+            session.heights(),
+            session.types(),
+        );
         renderer.present(frame);
     }
     println!(
@@ -323,7 +328,8 @@ fn run_capture(args: &[String]) -> ExitCode {
     let features = place_features(&field, &params.sim.worldgen, &params.content.terrain);
     print_terrain_census(&field, &features, &params);
     let heights = frame_heights(&field);
-    let frame = TerrainFrame::new(field.width(), field.height(), &heights);
+    let types = terrain_types(&heights, &params);
+    let frame = TerrainFrame::new(field.width(), field.height(), &heights, &types);
 
     let mut renderer = HeadlessRenderer::new(render.clone());
     // Adapter-local camera override for the multi-angle self-check (ADR 0020
@@ -436,18 +442,22 @@ fn run_capture_shape(args: &[String]) -> ExitCode {
     );
     let after_heights = session.heights().to_vec();
 
-    // Build the same rippling old→new tween the window animates (ADR 0022 §5).
-    // The ripple lags outer vertices by distance from the shaped vertex, so a
-    // filmstrip across `total_ms` shows the cascade settling from the inside out.
+    // Build the same rippling old→new tween the window animates (ADR 0022 §5),
+    // material-banded by each surface's own terrain types (ADR 0023) so the
+    // filmstrip shows the sea turning to shore/land as the cone rises. The ripple
+    // lags outer vertices by distance from the shaped vertex, so a filmstrip
+    // across `total_ms` shows the cascade settling from the inside out.
+    let before_types = terrain_types(&before_heights, &params);
+    let after_types = terrain_types(&after_heights, &params);
     let from = build_mesh(
-        &TerrainFrame::new(width, height, &before_heights),
+        &TerrainFrame::new(width, height, &before_heights, &before_types),
         render.mesh.vertical_scale,
-        &render.palette,
+        &render.material,
     );
     let to = build_mesh(
-        &TerrainFrame::new(width, height, &after_heights),
+        &TerrainFrame::new(width, height, &after_heights, &after_types),
         render.mesh.vertical_scale,
-        &render.palette,
+        &render.material,
     );
     let origin = vertex_position(sx, sy, 0, width, height, render.mesh.vertical_scale);
     let delays = ripple_delays(
@@ -584,6 +594,19 @@ fn print_terrain_census(field: &HeightField, features: &FeatureMap, params: &Par
     );
 }
 
+/// Classify a row-major height buffer into the per-vertex terrain types a drawn
+/// [`TerrainFrame`] carries (ADR 0023), reading the `sim.worldgen.sea_level` and
+/// `content.terrain.*` thresholds. Delegates to the app's `classify_heights` so
+/// the composition root and the interactive session derive types the same way.
+fn terrain_types(heights: &[i32], params: &Params) -> Vec<providence_ports::TerrainType> {
+    providence_app::classify_heights(
+        heights,
+        params.sim.worldgen.sea_level,
+        params.content.terrain.shore.band,
+        params.content.terrain.mountain.min_height,
+    )
+}
+
 /// Flatten a height field into the row-major buffer a [`TerrainFrame`] borrows.
 fn frame_heights(field: &HeightField) -> Vec<i32> {
     let mut heights = Vec::with_capacity(field.width() as usize * field.height() as usize);
@@ -644,17 +667,19 @@ fn print_terrain_demo(terrain: &TerrainParams) -> HeightField {
 /// presentation-config projection is live.
 fn present_demo_frame(field: &HeightField, render: &RenderParams) {
     let heights = frame_heights(field);
-    let frame = TerrainFrame::new(field.width(), field.height(), &heights);
+    // The demo present only proves the seam through the no-op renderer, which
+    // draws nothing — so a heights-only frame (empty types, ADR 0023) suffices.
+    let frame = TerrainFrame::new(field.width(), field.height(), &heights, &[]);
     let mut renderer = NoopRenderer::new();
     renderer.present(frame);
 
     println!(
         "providence: workbench seam OK — presented a {w}×{d} frame via NoopRenderer \
-         ({n} frame(s); palette low {low:?}, background {bg:?})",
+         ({n} frame(s); material land {land:?}, background {bg:?})",
         w = field.width(),
         d = field.height(),
         n = renderer.presented(),
-        low = render.palette.low_rgb,
+        land = render.material.land_rgb,
         bg = render.background.rgb,
     );
 }

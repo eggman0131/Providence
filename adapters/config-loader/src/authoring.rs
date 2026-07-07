@@ -9,8 +9,8 @@
 use garde::Validate;
 use providence_config::{
     AnimationParams, BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams,
-    InputParams, LightingParams, ManaMode, ManaParams, MeshParams, MountainContent, OpponentParams,
-    PaletteParams, Params, PlaceholderParams, PointerButton, RaiseParams, RenderParams,
+    InputParams, LightingParams, ManaMode, ManaParams, MaterialParams, MeshParams, MountainContent,
+    OpponentParams, Params, PlaceholderParams, PointerButton, RaiseParams, RenderParams,
     RockContent, Shape, ShapeInputParams, ShoreContent, SimParams, TerrainContent, TerrainParams,
     TreeContent, WinLossParams, WindowParams, WorldgenParams,
 };
@@ -314,9 +314,9 @@ pub struct RenderSection {
     /// `render.lighting.*` — the directional light shading the surface.
     #[garde(dive)]
     pub lighting: LightingSection,
-    /// `render.palette.*` — how vertex height maps to colour.
+    /// `render.material.*` — the terrain-type material table (ADR 0023).
     #[garde(dive)]
-    pub palette: PaletteSection,
+    pub material: MaterialSection,
     /// `render.background.*` — the surface the world is drawn against.
     #[garde(dive)]
     pub background: BackgroundSection,
@@ -406,16 +406,32 @@ pub struct LightingSection {
     pub diffuse: f32,
 }
 
-/// `render.palette.*` — vertex height → colour, lerped low→high (ADR 0020).
+/// `render.material.*` — the terrain-type material table (ADR 0023): a base
+/// colour per terrain type plus the snow the mountain band ramps toward.
 #[derive(Debug, Deserialize, JsonSchema, Validate)]
 #[serde(deny_unknown_fields)]
-pub struct PaletteSection {
-    /// `render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.
+#[allow(
+    clippy::struct_field_names,
+    reason = "each field is a distinct colour; the `_rgb` suffix names the linear-RGB unit, matching the `low_rgb`/`background.rgb` convention across render config"
+)]
+pub struct MaterialSection {
+    /// `render.material.water_rgb` — underwater seabed colour, linear RGB.
     #[garde(skip)]
-    pub low_rgb: [f32; 3],
-    /// `render.palette.high_rgb` — colour at the highest drawn height, linear RGB.
+    pub water_rgb: [f32; 3],
+    /// `render.material.shore_rgb` — the sandy coastal band, linear RGB.
     #[garde(skip)]
-    pub high_rgb: [f32; 3],
+    pub shore_rgb: [f32; 3],
+    /// `render.material.land_rgb` — ordinary grassy lowland, linear RGB.
+    #[garde(skip)]
+    pub land_rgb: [f32; 3],
+    /// `render.material.mountain_rgb` — bare rock at the mountain band base,
+    /// linear RGB.
+    #[garde(skip)]
+    pub mountain_rgb: [f32; 3],
+    /// `render.material.peak_rgb` — snow the mountain band ramps toward at its
+    /// highest vertices, linear RGB.
+    #[garde(skip)]
+    pub peak_rgb: [f32; 3],
 }
 
 /// `render.background.*` — the clear colour the world is drawn against.
@@ -615,9 +631,12 @@ impl ConfigRoot {
                 ambient: self.render.lighting.ambient,
                 diffuse: self.render.lighting.diffuse,
             },
-            palette: PaletteParams {
-                low_rgb: self.render.palette.low_rgb,
-                high_rgb: self.render.palette.high_rgb,
+            material: MaterialParams {
+                water_rgb: self.render.material.water_rgb,
+                shore_rgb: self.render.material.shore_rgb,
+                land_rgb: self.render.material.land_rgb,
+                mountain_rgb: self.render.material.mountain_rgb,
+                peak_rgb: self.render.material.peak_rgb,
             },
             background: BackgroundParams {
                 rgb: self.render.background.rgb,

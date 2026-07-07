@@ -227,8 +227,10 @@ mod tests {
         orbit_speed = 0.4\npan_speed = 0.05\nzoom_speed = 0.1\n\n\
         [render.lighting]\n\
         azimuth_degrees = 135.0\nelevation_degrees = 45.0\nambient = 0.25\ndiffuse = 0.85\n\n\
-        [render.palette]\n\
-        low_rgb = [0.24, 0.36, 0.16]\nhigh_rgb = [0.86, 0.86, 0.82]\n\n\
+        [render.material]\n\
+        water_rgb = [0.16, 0.34, 0.44]\nshore_rgb = [0.80, 0.74, 0.53]\n\
+        land_rgb = [0.33, 0.49, 0.24]\nmountain_rgb = [0.45, 0.42, 0.38]\n\
+        peak_rgb = [0.92, 0.93, 0.95]\n\n\
         [render.background]\n\
         rgb = [0.05, 0.06, 0.09]\n\n\
         [render.mesh]\nvertical_scale = 1.0\n\n\
@@ -429,7 +431,8 @@ mod tests {
         assert!(approx(render.camera.fov_degrees, 45.0));
         assert!(approx(render.camera.initial_distance, 24.0));
         assert!(approx(render.lighting.ambient, 0.25));
-        assert!(approx3(render.palette.low_rgb, [0.24, 0.36, 0.16]));
+        assert!(approx3(render.material.shore_rgb, [0.80, 0.74, 0.53]));
+        assert!(approx3(render.material.peak_rgb, [0.92, 0.93, 0.95]));
         assert!(approx3(render.background.rgb, [0.05, 0.06, 0.09]));
         assert!(approx(render.mesh.vertical_scale, 1.0));
         assert_eq!((render.window.width, render.window.height), (1280, 720));

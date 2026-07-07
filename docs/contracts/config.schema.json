@@ -382,6 +382,70 @@
             "diffuse"
           ]
         },
+        "material": {
+          "description": "`render.material.*` — the terrain-type material table (ADR 0023).",
+          "type": "object",
+          "properties": {
+            "land_rgb": {
+              "description": "`render.material.land_rgb` — ordinary grassy lowland, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "mountain_rgb": {
+              "description": "`render.material.mountain_rgb` — bare rock at the mountain band base,\nlinear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "peak_rgb": {
+              "description": "`render.material.peak_rgb` — snow the mountain band ramps toward at its\nhighest vertices, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "shore_rgb": {
+              "description": "`render.material.shore_rgb` — the sandy coastal band, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "water_rgb": {
+              "description": "`render.material.water_rgb` — underwater seabed colour, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "water_rgb",
+            "shore_rgb",
+            "land_rgb",
+            "mountain_rgb",
+            "peak_rgb"
+          ]
+        },
         "mesh": {
           "description": "`render.mesh.*` — how the height field becomes a drawable surface.",
           "type": "object",
@@ -396,37 +460,6 @@
           "additionalProperties": false,
           "required": [
             "vertical_scale"
-          ]
-        },
-        "palette": {
-          "description": "`render.palette.*` — how vertex height maps to colour.",
-          "type": "object",
-          "properties": {
-            "high_rgb": {
-              "description": "`render.palette.high_rgb` — colour at the highest drawn height, linear RGB.",
-              "type": "array",
-              "items": {
-                "type": "number",
-                "format": "float"
-              },
-              "maxItems": 3,
-              "minItems": 3
-            },
-            "low_rgb": {
-              "description": "`render.palette.low_rgb` — colour at the lowest drawn height, linear RGB.",
-              "type": "array",
-              "items": {
-                "type": "number",
-                "format": "float"
-              },
-              "maxItems": 3,
-              "minItems": 3
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "low_rgb",
-            "high_rgb"
           ]
         },
         "window": {
@@ -457,7 +490,7 @@
       "required": [
         "camera",
         "lighting",
-        "palette",
+        "material",
         "background",
         "mesh",
         "window",

@@ -124,15 +124,18 @@ elevation_degrees = 45.0  # light angle above the horizon
 ambient = 0.25            # ambient fraction, [0, 1]
 diffuse = 0.85            # diffuse fraction, [0, 1]
 
-[render.palette]
-# Vertex height -> colour, lerped from low (lowest drawn height) to high
-# (highest), linear RGB. With the seeded island (ADR 0021) the lowest height is
-# the flat sea at the datum, so `low` doubles as the sea colour: a shallow teal
-# that ramps up through green lowland to pale high ground. (The renderer shades
-# purely by height and has no true waterline yet — a distinct water band is a
-# renderer follow-up; until then this two-stop ramp reads the sea as water.)
-low_rgb = [0.16, 0.34, 0.44]
-high_rgb = [0.88, 0.87, 0.80]
+[render.material]
+# The terrain-type material table (ADR 0023; issue #22 Phase 1): a base colour
+# per simulation terrain type (ADR 0017 §1), so what the land *is* drives what
+# it looks like. shore -> sand, land -> grass, mountain -> rock ramping to snow
+# (`peak_rgb`) at its highest vertices. Water vertices take `water_rgb` (the
+# seabed showing through, until Phase 2 floats a real water surface over it).
+# All linear RGB. Subsumes the former two-stop `render.palette`.
+water_rgb = [0.16, 0.34, 0.44]     # underwater seabed (a shallow teal)
+shore_rgb = [0.80, 0.74, 0.53]     # pale sand at the waterline
+land_rgb = [0.33, 0.49, 0.24]      # grassy lowland
+mountain_rgb = [0.45, 0.42, 0.38]  # bare rock at the mountain base
+peak_rgb = [0.92, 0.93, 0.95]      # snow toward the peaks
 
 [render.background]
 # Clear colour the world is drawn against, linear RGB.

@@ -11,7 +11,8 @@
 //! [`WindowRenderer`] (windowed `wgpu`/`winit`), the [`HeadlessRenderer`]
 //! (render-to-PNG capture — the agents-only visual self-check), and the
 //! GPU-free [`NoopRenderer`] test double. They all draw the same pure geometry
-//! ([`mesh`]), camera ([`camera`]), light ([`light`]), and palette ([`color`]),
+//! ([`mesh`]), camera ([`camera`]), light ([`light`]), and material table
+//! ([`color`]),
 //! which are unit-tested in the gate; the `wgpu`/`winit` glue is confined here
 //! and exercised only through the capture path (I9).
 
@@ -90,7 +91,7 @@ mod tests {
     #[test]
     fn noop_renderer_counts_presents_but_draws_nothing() {
         let heights = [0, 1, 1, 2];
-        let frame = TerrainFrame::new(2, 2, &heights);
+        let frame = TerrainFrame::new(2, 2, &heights, &[]);
         let mut renderer = NoopRenderer::new();
         assert_eq!(renderer.presented(), 0);
         renderer.present(frame);
