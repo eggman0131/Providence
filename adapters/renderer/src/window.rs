@@ -28,7 +28,7 @@ use crate::gpu::{self, TerrainScene};
 use crate::hud::{Hud, Readout, ScreenDescriptor};
 use crate::input::{is_shaping_click, shape_action};
 use crate::mesh::{Mesh, build_mesh, vertex_position};
-use crate::pick::{GridSnapshot, cursor_ndc, pick_vertex, screen_ray};
+use crate::pick::{GridSnapshot, PickedVertex, cursor_ndc, pick_vertex, screen_ray};
 use crate::water::WaterPlane;
 
 /// The window title bar text for the workbench.
@@ -302,6 +302,10 @@ struct WindowState {
     /// (issue #9 Phase 2), and the HUD picks the reticle vertex (issue #8
     /// Phase 3). Refreshed from the driver after every shaping command.
     grid: GridSnapshot,
+    /// The vertex currently under the cursor, if any (issue #12): tracked so a
+    /// mouse-move only re-uploads the hover-highlight glow (and redraws) when the
+    /// targeted vertex actually changes, not on every pixel of motion.
+    hover_vertex: Option<PickedVertex>,
     /// The mesh's vertical scale, so picks and rebuilt geometry line up with
     /// what is drawn.
     vertical_scale: f32,
@@ -388,6 +392,7 @@ impl WindowState {
             input: input.clone(),
             material: params.material.clone(),
             grid: GridSnapshot::default(),
+            hover_vertex: None,
             vertical_scale: params.mesh.vertical_scale,
             waterline,
             water_animates: params.water.ripple_amplitude > 0.0 && params.water.ripple_speed > 0.0,
@@ -491,6 +496,50 @@ impl WindowState {
         // centre lines up with the drawn geometry.
         let origin = vertex_position(picked.x, picked.y, 0, width, height, self.vertical_scale);
         self.start_animation(target, [origin[0], origin[2]]);
+        // The land under the cursor just moved, so refresh the hover glow to ride
+        // the newly-shaped vertex even though the cursor held still (issue #12).
+        self.update_hover();
+    }
+
+    /// The grid vertex currently under the cursor, resolved through the same
+    /// ray/pick maths a shaping click uses (issue #12), or `None` when the cursor
+    /// is off the terrain (or no cursor has been seen yet). Read-only view maths,
+    /// entirely adapter-local (ADR 0020 §3).
+    fn pick_hover(&self) -> Option<PickedVertex> {
+        if self.grid.width == 0 || self.grid.height == 0 {
+            return None;
+        }
+        let (cursor_x, cursor_y) = self.drag.last_cursor?;
+        let size = (self.config.width, self.config.height);
+        let ndc = cursor_ndc((cursor_x as f32, cursor_y as f32), size);
+        let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+        let ray = screen_ray(&self.controller.camera(), aspect, ndc);
+        pick_vertex(&ray, &self.grid.frame(), self.vertical_scale)
+    }
+
+    /// Re-resolve the vertex under the cursor and, when it changed, move the
+    /// hover-highlight glow onto it and request a redraw (issue #12). Comparing
+    /// the picked vertex first keeps a still cursor — or motion within one vertex —
+    /// from re-uploading the uniform or redrawing needlessly. The glow's centre is
+    /// the vertex's own drawn world position, so it sits exactly on the surface.
+    fn update_hover(&mut self) {
+        let picked = self.pick_hover();
+        if picked == self.hover_vertex {
+            return;
+        }
+        self.hover_vertex = picked;
+        let center = picked.map(|v| {
+            vertex_position(
+                v.x,
+                v.y,
+                v.height,
+                self.grid.width,
+                self.grid.height,
+                self.vertical_scale,
+            )
+        });
+        self.scene.set_highlight(center);
+        self.window.request_redraw();
     }
 
     /// Begin easing the drawn surface toward `target`, rippling outward from
@@ -566,6 +615,10 @@ impl WindowState {
             }
         }
         self.drag.last_cursor = Some((x, y));
+        // Track the hovered vertex so the highlight glow marks what a click would
+        // shape (issue #12). Also refreshes while orbiting/panning, since moving
+        // the camera changes which vertex sits under the cursor.
+        self.update_hover();
     }
 
     /// Zoom on scroll (wheel lines or trackpad pixels), then redraw.

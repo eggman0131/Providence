@@ -8,11 +8,11 @@
 
 use garde::Validate;
 use providence_config::{
-    AnimationParams, BackgroundParams, CameraParams, ContentParams, EconomyParams, HudParams,
-    InputParams, LightingParams, ManaMode, ManaParams, MaterialParams, MeshParams, MountainContent,
-    OpponentParams, Params, PlaceholderParams, PointerButton, RaiseParams, RenderParams,
-    RockContent, Shape, ShapeInputParams, ShoreContent, SimParams, TerrainContent, TerrainParams,
-    TreeContent, WaterParams, WinLossParams, WindowParams, WorldgenParams,
+    AnimationParams, BackgroundParams, CameraParams, ContentParams, EconomyParams, HighlightParams,
+    HudParams, InputParams, LightingParams, ManaMode, ManaParams, MaterialParams, MeshParams,
+    MountainContent, OpponentParams, Params, PlaceholderParams, PointerButton, RaiseParams,
+    RenderParams, RockContent, Shape, ShapeInputParams, ShoreContent, SimParams, TerrainContent,
+    TerrainParams, TreeContent, WaterParams, WinLossParams, WindowParams, WorldgenParams,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -337,6 +337,9 @@ pub struct RenderSection {
     /// #9/#10 Phase 3).
     #[garde(dive)]
     pub animation: AnimationSection,
+    /// `render.highlight.*` — the hover highlight glow (issue #12).
+    #[garde(dive)]
+    pub highlight: HighlightSection,
 }
 
 /// `render.camera.*` — the workbench view camera (ADR 0020 §3). Its initial
@@ -532,6 +535,25 @@ pub struct AnimationSection {
     pub ripple_ms_per_unit: f32,
 }
 
+/// `render.highlight.*` — the hover highlight glow (issue #12): a subtle soft
+/// pool of light on the terrain under the cursor, marking the vertex a shaping
+/// click would target. Presentation only, adapter-local (ADR 0020 §3).
+#[derive(Debug, Deserialize, JsonSchema, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct HighlightSection {
+    /// `render.highlight.rgb` — the glow tint, linear RGB.
+    #[garde(skip)]
+    pub rgb: [f32; 3],
+    /// `render.highlight.radius` — the soft disc's radius in world units.
+    /// Non-negative; 0 disables the glow.
+    #[garde(range(min = 0.0))]
+    pub radius: f32,
+    /// `render.highlight.intensity` — peak brightness added at the centre, in
+    /// `[0, 1]`; 0 disables the glow.
+    #[garde(range(min = 0.0, max = 1.0))]
+    pub intensity: f32,
+}
+
 /// `input.*` (docs/40-parameterisation.md §2.2) — input mapping for the
 /// interactive workbench. Outside the determinism boundary; projected into
 /// [`InputParams`] via [`ConfigRoot::into_input_params`], never into the
@@ -696,6 +718,11 @@ impl ConfigRoot {
             animation: AnimationParams {
                 duration_ms: self.render.animation.duration_ms,
                 ripple_ms_per_unit: self.render.animation.ripple_ms_per_unit,
+            },
+            highlight: HighlightParams {
+                rgb: self.render.highlight.rgb,
+                radius: self.render.highlight.radius,
+                intensity: self.render.highlight.intensity,
             },
         }
     }

@@ -128,15 +128,22 @@ pub fn screen_ray(camera: &Camera, aspect: f32, ndc: [f32; 2]) -> Ray {
     }
 }
 
-/// The grid vertex `ray` passes closest to, among vertices **in front of** the
-/// ray origin. Returns `None` only when there is nothing to pick — an empty
-/// frame, or every vertex behind the camera.
+/// The grid vertex the `ray` strikes: cast it against the drawn terrain
+/// **surface** and return the vertex of the cell it first hits.
 ///
-/// "Closest" is the smallest perpendicular distance from the vertex to the ray
-/// line; ties (a vertex directly behind another along the ray) break toward the
-/// one nearer the origin, so the crosshair reports the front face it points at.
-/// `vertical_scale` matches the mesh's, so the picked world positions line up
-/// with what is drawn ([`crate::mesh::vertex_position`]).
+/// The terrain is the flat-shaded height field [`crate::mesh::build_mesh`] draws
+/// — two triangles per grid cell. This walks those same triangles, keeps the
+/// **nearest** front hit (smallest positive distance along the ray, so a near
+/// ridge correctly *occludes* the land behind it), and snaps that hit point to
+/// the closest of the struck cell's four corners — the grid vertex under the
+/// cursor, the one #9 raises/lowers and the readout reports. `vertical_scale`
+/// matches the mesh's, so the surface picked is exactly the surface drawn
+/// ([`crate::mesh::vertex_position`]).
+///
+/// Returns `None` when the ray meets no triangle at all — an empty or single-row
+/// frame, or a cursor pointing past the land into the background. Unlike a
+/// nearest-to-the-ray-*line* pick, a miss is a real miss, not the closest stray
+/// vertex, and an occluded vertex is never returned.
 #[must_use]
 pub fn pick_vertex(
     ray: &Ray,
@@ -144,41 +151,142 @@ pub fn pick_vertex(
     vertical_scale: f32,
 ) -> Option<PickedVertex> {
     let (width, depth) = (frame.width(), frame.height());
-    let mut best: Option<(f32, f32, PickedVertex)> = None; // (perp², t, vertex)
+    let mut best: Option<(f32, PickedVertex)> = None; // (distance along ray, vertex)
 
-    for y in 0..depth {
-        for x in 0..width {
-            let Some(height) = frame.get(x, y) else {
-                continue;
+    for y in 0..depth.saturating_sub(1) {
+        for x in 0..width.saturating_sub(1) {
+            let (Some(h00), Some(h10), Some(h01), Some(h11)) = (
+                frame.get(x, y),
+                frame.get(x + 1, y),
+                frame.get(x, y + 1),
+                frame.get(x + 1, y + 1),
+            ) else {
+                continue; // a well-formed frame skips no cell
             };
-            let position = vertex_position(x, y, height, width, depth, vertical_scale);
-            let offset = sub(position, ray.origin);
-            let t = dot(offset, ray.direction); // signed distance along the ray
-            if t <= 0.0 {
-                continue; // at or behind the eye — not under the forward view
-            }
-            // Perpendicular distance², from |offset|² = t² + perp² (unit dir).
-            let perp_sq = (dot(offset, offset) - t * t).max(0.0);
-            let candidate = PickedVertex { x, y, height };
-            let take = match best {
-                None => true,
-                Some((best_perp_sq, best_t, _)) => {
-                    perp_sq < best_perp_sq
-                        || ((perp_sq - best_perp_sq).abs() <= f32::EPSILON && t < best_t)
+            // The cell's four corners, positioned exactly as the mesh draws them.
+            let corners = [
+                (x, y, h00),
+                (x + 1, y, h10),
+                (x, y + 1, h01),
+                (x + 1, y + 1, h11),
+            ]
+            .map(|(cx, cy, h)| Corner {
+                x: cx,
+                y: cy,
+                height: h,
+                position: vertex_position(cx, cy, h, width, depth, vertical_scale),
+            });
+
+            // The two triangles `build_mesh` splits this cell into (same c00–c11
+            // diagonal), so the picked surface is exactly the surface drawn.
+            for triangle in [
+                [corners[0], corners[1], corners[3]],
+                [corners[0], corners[3], corners[2]],
+            ] {
+                let Some(t) = ray_triangle(
+                    ray,
+                    triangle[0].position,
+                    triangle[1].position,
+                    triangle[2].position,
+                ) else {
+                    continue;
+                };
+                let take = match best {
+                    None => true,
+                    Some((best_t, _)) => t < best_t,
+                };
+                if take {
+                    best = Some((t, nearest_corner(point_at(ray, t), &corners)));
                 }
-            };
-            if take {
-                best = Some((perp_sq, t, candidate));
             }
         }
     }
 
-    best.map(|(_, _, vertex)| vertex)
+    best.map(|(_, vertex)| vertex)
+}
+
+/// A cell corner during picking: its grid coordinate and height plus the world
+/// position the mesh draws it at, so the struck cell can be snapped to whichever
+/// corner the cursor points nearest.
+#[derive(Clone, Copy)]
+struct Corner {
+    x: u32,
+    y: u32,
+    height: i32,
+    position: Vec3,
+}
+
+/// The world point `t` units along `ray` from its origin — where the ray meets
+/// the surface.
+fn point_at(ray: &Ray, t: f32) -> Vec3 {
+    [
+        ray.origin[0] + ray.direction[0] * t,
+        ray.origin[1] + ray.direction[1] * t,
+        ray.origin[2] + ray.direction[2] * t,
+    ]
+}
+
+/// The corner of `corners` nearest `hit` in world space — the grid vertex the
+/// cursor points at within the struck cell. Ties break toward the earlier corner
+/// (row-major: `(x, y)`, then `(x+1, y)`, then the next row), a stable documented
+/// order rather than an arbitrary one.
+fn nearest_corner(hit: Vec3, corners: &[Corner; 4]) -> PickedVertex {
+    let mut best = corners[0];
+    let mut best_dist_sq = f32::INFINITY;
+    for &corner in corners {
+        let delta = sub(corner.position, hit);
+        let dist_sq = dot(delta, delta);
+        if dist_sq < best_dist_sq {
+            best_dist_sq = dist_sq;
+            best = corner;
+        }
+    }
+    PickedVertex {
+        x: best.x,
+        y: best.y,
+        height: best.height,
+    }
+}
+
+/// Möller–Trumbore ray/triangle intersection: the positive distance along `ray`
+/// to triangle `p0→p1→p2`, or `None` if the ray misses it, runs parallel to it,
+/// or meets it at/behind the origin. **Double-sided** — the terrain's triangle
+/// winding varies, and picking wants the surface hit regardless of facing. The
+/// small epsilon makes shared edges and vertices belong to at least one adjacent
+/// triangle, so a ray through a seam still resolves.
+fn ray_triangle(ray: &Ray, p0: Vec3, p1: Vec3, p2: Vec3) -> Option<f32> {
+    // Structural geometry tolerance for the parallel test and edge inclusivity —
+    // not a tunable, like `normalize`'s zero-length guard.
+    const EPS: f32 = 1e-6;
+    let edge1 = sub(p1, p0);
+    let edge2 = sub(p2, p0);
+    let pvec = cross(ray.direction, edge2);
+    let det = dot(edge1, pvec);
+    if det.abs() < EPS {
+        return None; // the ray is parallel to the triangle's plane
+    }
+    let inv_det = 1.0 / det;
+    let tvec = sub(ray.origin, p0);
+    let bary_u = dot(tvec, pvec) * inv_det;
+    if !(-EPS..=1.0 + EPS).contains(&bary_u) {
+        return None;
+    }
+    let qvec = cross(tvec, edge1);
+    let bary_v = dot(ray.direction, qvec) * inv_det;
+    if bary_v < -EPS || bary_u + bary_v > 1.0 + EPS {
+        return None;
+    }
+    let hit_distance = dot(edge2, qvec) * inv_det;
+    if hit_distance > EPS {
+        Some(hit_distance)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PickedVertex, cursor_ndc, pick_vertex, reticle_ray, screen_ray};
+    use super::{PickedVertex, Ray, cursor_ndc, pick_vertex, reticle_ray, screen_ray};
     use crate::camera::Camera;
     use crate::math::{dot, normalize, sub};
     use providence_ports::TerrainFrame;
@@ -308,19 +416,61 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_left_of_centre_picks_a_left_vertex() {
-        // Looking straight down with up = −z, world +x is the camera's right.
-        // A cursor left of centre casts a ray leaning −x, so it picks a vertex
-        // on the −x (left) side — the cursor-tracked pick issue #9 needs.
+    fn a_cursor_left_of_centre_picks_a_left_column() {
+        // Flat 5×5 land spanning world x ∈ [−2, 2]. Looking straight down with
+        // up = −z, world +x is the camera's right, so a cursor a little left of
+        // centre casts a ray striking the ground left of the middle column — the
+        // picked vertex is a left one (the cursor-tracked pick #9 needs), now via
+        // a true surface hit rather than nearest-to-the-ray-line.
+        let heights = [0; 25];
+        let frame = TerrainFrame::new(5, 5, &heights, &[], 0);
+        let camera = top_down(12.0);
+        let ndc = cursor_ndc((250.0, 300.0), (600, 600)); // left of the 600-wide centre
+        let ray = screen_ray(&camera, 1.0, ndc);
+        let picked = pick_vertex(&ray, &frame, 1.0).expect("the cursor is over the land");
+        assert!(picked.x < 2, "a left-of-centre cursor picks a left column");
+    }
+
+    #[test]
+    fn a_cursor_off_the_terrain_hits_nothing() {
+        // A flat 3×3 island spanning world x, z ∈ [−1, 1]. A cursor hard against
+        // the edge casts a ray meeting the ground plane well outside the meshed
+        // cells, so there is no triangle to strike — a miss is a real miss. The
+        // old nearest-to-the-ray-line pick always returned *some* vertex here;
+        // the surface raycast correctly returns nothing.
         let heights = [0; 9];
         let frame = TerrainFrame::new(3, 3, &heights, &[], 0);
         let camera = top_down(20.0);
-        let ndc = cursor_ndc((100.0, 300.0), (800, 600)); // well left of centre
+        let ndc = cursor_ndc((20.0, 300.0), (800, 600)); // hard against the left edge
         let ray = screen_ray(&camera, 800.0 / 600.0, ndc);
-        let picked = pick_vertex(&ray, &frame, 1.0).expect("a vertex is under the cursor");
+        assert_eq!(
+            pick_vertex(&ray, &frame, 1.0),
+            None,
+            "pointing off the land picks nothing"
+        );
+    }
+
+    #[test]
+    fn the_nearer_surface_occludes_the_land_behind_it() {
+        // A 2-wide strip, 4 rows deep: two peaks (rows 1 and 3) with a valley
+        // (row 2) between them. A ray skimming in from the near side at the peak's
+        // mid-height strikes the near peak first; the valley and the far peak
+        // behind it are hidden. A nearest-to-the-ray-line pick could return the
+        // occluded valley — the surface raycast never does.
+        //                 row y:  0   1   2   3
+        //          height (both cols): 0   6   0   6
+        let heights = [0, 0, 6, 6, 0, 0, 6, 6]; // row-major, width 2
+        let frame = TerrainFrame::new(2, 4, &heights, &[], 0);
+        // Horizontal ray at the peak's mid-height, entering from −z (the near
+        // side), offset in x so it sits squarely in the single column of cells.
+        let ray = Ray {
+            origin: [-0.3, 3.0, -6.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let picked = pick_vertex(&ray, &frame, 1.0).expect("the ray meets the near peak");
         assert!(
-            picked.x < 1,
-            "a left-of-centre cursor resolves to a left column"
+            picked.y <= 1,
+            "picked the struck near peak (rows 0–1), not the occluded valley (row 2) or far peak (row 3)"
         );
     }
 }

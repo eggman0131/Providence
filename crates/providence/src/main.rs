@@ -10,11 +10,15 @@
 //!   ADR 0022): a lit height field the Director can orbit / pan / zoom **and
 //!   shape** — left-click raises the picked vertex, right-click lowers it, and a
 //!   drag still moves the camera. Needs a display.
-//! - `capture [PATH [YAW PITCH DISTANCE]]` — render the same scene headlessly to
-//!   a PNG (ADR 0020 §2), the agents-only visual self-check used by `/verify`.
-//!   The optional orbit (yaw/pitch degrees, distance) drives the Phase-2 camera
-//!   for the multi-angle self-check; omitted, it uses the configured pose. No
-//!   display required.
+//! - `capture [PATH [YAW PITCH DISTANCE [vertex HL_X HL_Y | pick PX PY]]]` —
+//!   render the same scene headlessly to a PNG (ADR 0020 §2), the agents-only
+//!   visual self-check used by `/verify`. The optional orbit (yaw/pitch degrees,
+//!   distance) drives the Phase-2 camera; omitted, it uses the configured pose. A
+//!   trailing `vertex HL_X HL_Y` places the hover-highlight glow on that grid
+//!   vertex to judge its subtlety, and `pick PX PY` places it where the ray
+//!   through screen pixel `(PX, PY)` strikes the surface — the display-free
+//!   exercise of the surface-raycast pick (issue #12, Option 2). No display
+//!   required.
 //! - `capture-shape [DIR]` — the display-free proof of the interactive shaping
 //!   seam and its rippling animation (ADR 0022): submit a scripted
 //!   `TerrainCommand` through the same `SimDriver` submit + snapshot-pull path
@@ -38,8 +42,9 @@ use providence_core::terrain::{
 };
 use providence_ports::{RendererPort, SimDriver, TerrainCommand, TerrainFrame};
 use providence_renderer::{
-    HeadlessRenderer, Mesh, MeshTween, NoopRenderer, OrbitController, WaterPlane, WindowRenderer,
-    build_mesh, ripple_delays, vertex_position,
+    Camera, HeadlessRenderer, Mesh, MeshTween, NoopRenderer, OrbitController, WaterPlane,
+    WindowRenderer, build_mesh, cursor_ndc, pick_vertex, ripple_delays, screen_ray,
+    vertex_position,
 };
 
 /// Fixed demo values for the smoke run — not behavioural config (the smoke
@@ -70,47 +75,91 @@ fn main() -> ExitCode {
         Some(other) => {
             eprintln!(
                 "providence: unknown subcommand `{other}` (try: \
-                 workbench | capture [PATH [YAW PITCH DISTANCE]] | capture-shape [DIR])"
+                 workbench | capture [PATH [YAW PITCH DISTANCE [vertex HL_X HL_Y | pick PX PY]]] | \
+                 capture-shape [DIR])"
             );
             ExitCode::FAILURE
         }
     }
 }
 
-/// A parsed `capture` invocation: where to write the PNG and, optionally, an
-/// explicit orbit pose (yaw/pitch degrees, distance) for the Phase-2
-/// multi-angle self-check.
+/// A parsed `capture` invocation: where to write the PNG, optionally an explicit
+/// orbit pose (yaw/pitch degrees, distance) for the Phase-2 multi-angle
+/// self-check, and optionally where to place the hover-highlight glow (issue #12)
+/// so it can be judged without a display.
 struct CaptureArgs {
     path: PathBuf,
     pose: Option<(f32, f32, f32)>,
+    highlight: Option<HighlightSpec>,
 }
 
-/// Parse the `capture` arguments: `[PATH [YAW PITCH DISTANCE]]`. A lone path
-/// keeps the configured pose; all four give an explicit orbit. Any other arity
-/// (e.g. two args) is a usage error rather than a silent misread.
+/// Where to place the hover-highlight glow for a capture (issue #12).
+enum HighlightSpec {
+    /// Glow directly at grid vertex `(x, y)` — judges the glow's subtlety.
+    Vertex(u32, u32),
+    /// Glow at the vertex the ray through screen pixel `(px, py)` strikes — the
+    /// display-free exercise of the surface-raycast pick (Option 2): it lands on
+    /// the visible surface under the cursor, or nowhere if the ray misses.
+    Pick(f32, f32),
+}
+
+/// Parse the `capture` arguments:
+/// `[PATH [YAW PITCH DISTANCE [vertex HL_X HL_Y | pick PX PY]]]`. A lone path
+/// keeps the configured pose; four args give an explicit orbit; a trailing
+/// `vertex X Y` places the glow at that grid vertex, and `pick PX PY` places it
+/// where the ray through screen pixel `(PX, PY)` strikes the surface (issue #12).
+/// Any other arity is a usage error rather than a silent misread.
 fn parse_capture_args(args: &[String]) -> Result<CaptureArgs, String> {
     let parse = |raw: &str, name: &str| {
         raw.parse::<f32>()
             .map_err(|_| format!("`{name}` must be a number, got `{raw}`"))
     };
+    let parse_u32 = |raw: &str, name: &str| {
+        raw.parse::<u32>()
+            .map_err(|_| format!("`{name}` must be a whole number, got `{raw}`"))
+    };
+    let pose = |yaw: &str, pitch: &str, distance: &str| {
+        Ok::<_, String>((
+            parse(yaw, "YAW")?,
+            parse(pitch, "PITCH")?,
+            parse(distance, "DISTANCE")?,
+        ))
+    };
     match args {
         [] => Ok(CaptureArgs {
             path: PathBuf::from(DEFAULT_CAPTURE_PATH),
             pose: None,
+            highlight: None,
         }),
         [path] => Ok(CaptureArgs {
             path: PathBuf::from(path),
             pose: None,
+            highlight: None,
         }),
         [path, yaw, pitch, distance] => Ok(CaptureArgs {
             path: PathBuf::from(path),
-            pose: Some((
-                parse(yaw, "YAW")?,
-                parse(pitch, "PITCH")?,
-                parse(distance, "DISTANCE")?,
-            )),
+            pose: Some(pose(yaw, pitch, distance)?),
+            highlight: None,
         }),
-        _ => Err("usage: capture [PATH [YAW PITCH DISTANCE]]".into()),
+        [path, yaw, pitch, distance, kind, a, b] => {
+            let highlight = match kind.as_str() {
+                "vertex" => HighlightSpec::Vertex(parse_u32(a, "HL_X")?, parse_u32(b, "HL_Y")?),
+                "pick" => HighlightSpec::Pick(parse(a, "PX")?, parse(b, "PY")?),
+                other => {
+                    return Err(format!(
+                        "highlight kind must be `vertex` or `pick`, got `{other}`"
+                    ));
+                }
+            };
+            Ok(CaptureArgs {
+                path: PathBuf::from(path),
+                pose: Some(pose(yaw, pitch, distance)?),
+                highlight: Some(highlight),
+            })
+        }
+        _ => {
+            Err("usage: capture [PATH [YAW PITCH DISTANCE [vertex HL_X HL_Y | pick PX PY]]]".into())
+        }
     }
 }
 
@@ -339,13 +388,26 @@ fn run_capture(args: &[String]) -> ExitCode {
     );
 
     let mut renderer = HeadlessRenderer::new(render.clone());
-    // Adapter-local camera override for the multi-angle self-check (ADR 0020
-    // §3): resolve the requested orbit through the same controller the window
-    // uses, so a captured angle matches what the Director would see live.
-    if let Some((yaw, pitch, distance)) = capture.pose {
-        let mut controller = OrbitController::from_params(&render.camera);
-        controller.set_pose(yaw, pitch, distance);
-        renderer.set_view(controller.camera());
+    // Resolve the effective capture camera once (ADR 0020 §3): the requested
+    // orbit through the same controller the window uses, or the configured pose.
+    // The highlight's `pick` mode casts through this exact camera, so a captured
+    // pick matches what the Director would strike live.
+    let camera = match capture.pose {
+        Some((yaw, pitch, distance)) => {
+            let mut controller = OrbitController::from_params(&render.camera);
+            controller.set_pose(yaw, pitch, distance);
+            controller.camera()
+        }
+        None => Camera::from_params(&render.camera),
+    };
+    renderer.set_view(camera);
+    // Place the hover-highlight glow for the display-free self-check (issue #12).
+    // A `vertex` glow sits on a chosen grid vertex to judge subtlety; a `pick`
+    // glow runs the *live* pick path — screen ray → surface raycast (Option 2) —
+    // so the capture shows where a click at that pixel actually lands.
+    if let Some(spec) = &capture.highlight {
+        let center = resolve_highlight(spec, &camera, &render, &frame);
+        renderer.set_highlight(center);
     }
     renderer.present(frame);
     match renderer.capture(&capture.path) {
@@ -367,6 +429,53 @@ fn run_capture(args: &[String]) -> ExitCode {
         Err(error) => {
             eprintln!("providence: capture error: {error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Resolve the world-space centre of the hover-highlight glow for a capture
+/// (issue #12). A `vertex` spec sits on that grid vertex directly (judging the
+/// glow's subtlety); a `pick` spec casts the ray through the given screen pixel
+/// and snaps to the vertex it strikes — the display-free exercise of the surface
+/// raycast (Option 2): it lands on the visible face under the cursor, so a click
+/// there would target it. A pick that misses the land lights nothing (`None`) and
+/// prints what it struck so the capture's target is on the record.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "viewport pixel dimensions are small integers; the u32→f32 cast for the aspect ratio is exact here"
+)]
+fn resolve_highlight(
+    spec: &HighlightSpec,
+    camera: &Camera,
+    render: &RenderParams,
+    frame: &TerrainFrame<'_>,
+) -> Option<[f32; 3]> {
+    let scale = render.mesh.vertical_scale;
+    let (width, height) = (frame.width(), frame.height());
+    match *spec {
+        HighlightSpec::Vertex(hx, hy) => {
+            let picked_height = frame.get(hx, hy)?; // out-of-range vertex lights nothing
+            Some(vertex_position(hx, hy, picked_height, width, height, scale))
+        }
+        HighlightSpec::Pick(px, py) => {
+            let size = (render.window.width, render.window.height);
+            let ndc = cursor_ndc((px, py), size);
+            let aspect = size.0 as f32 / size.1.max(1) as f32;
+            let ray = screen_ray(camera, aspect, ndc);
+            let picked = pick_vertex(&ray, frame, scale)?;
+            println!(
+                "providence: pixel ({px}, {py}) picks vertex ({}, {}) height {} \
+                 — the visible surface under the cursor (surface raycast, Option 2)",
+                picked.x, picked.y, picked.height
+            );
+            Some(vertex_position(
+                picked.x,
+                picked.y,
+                picked.height,
+                width,
+                height,
+                scale,
+            ))
         }
     }
 }

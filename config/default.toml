@@ -188,6 +188,18 @@ duration_ms = 250.0        # per-vertex settle time (ms); 0 snaps instantly (Pha
 # spacing this is ms per vertex ring; 0 settles the whole change together (Phase 3).
 ripple_ms_per_unit = 18.0
 
+[render.highlight]
+# The hover highlight (issue #12): a subtle soft pool of light the renderer paints
+# on the terrain under the cursor, marking the vertex a click would shape — so you
+# can see what you're about to target before committing. Purely presentation and
+# adapter-local (ADR 0020 §3): the renderer resolves the cursor-picked vertex and
+# tints the surface around it at the edge; nothing it computes reaches the core.
+# Kept deliberately gentle — a soft glow that eases to nothing at its rim, never a
+# hard dot or ring — so it reads as light on the land, not paint.
+rgb = [0.95, 0.90, 0.72]   # glow tint, linear RGB (a soft warm white — reads as light)
+radius = 2.5               # soft disc radius in world units (0 disables the glow)
+intensity = 0.18           # peak brightness added at the centre, [0,1] (0 disables)
+
 # --- Input mapping (docs/40-parameterisation.md §2.2, ADR 0022) ---
 # input.* is the interactive workbench's control mapping. Like render.*, it is
 # NON-deterministic and sits OUTSIDE the determinism boundary: the loader

@@ -239,7 +239,8 @@ mod tests {
         [render.mesh]\nvertical_scale = 1.0\n\n\
         [render.window]\nwidth = 1280\nheight = 720\n\n\
         [render.hud]\nenabled = true\nshow_camera = true\nshow_reticle = true\n\n\
-        [render.animation]\nduration_ms = 250.0\nripple_ms_per_unit = 18.0\n";
+        [render.animation]\nduration_ms = 250.0\nripple_ms_per_unit = 18.0\n\n\
+        [render.highlight]\nrgb = [0.95, 0.90, 0.72]\nradius = 2.5\nintensity = 0.18\n";
 
     /// The `[input.*]` block shared by the fixtures — mirrors the shipped
     /// `config/default.toml` so the default layer stays complete now that
@@ -463,6 +464,10 @@ mod tests {
             approx(render.animation.ripple_ms_per_unit, 18.0),
             "the ripple stagger projects through (ADR 0022 §5; Phase 4)"
         );
+        // The hover-highlight glow projects through (issue #12).
+        assert!(approx3(render.highlight.rgb, [0.95, 0.90, 0.72]));
+        assert!(approx(render.highlight.radius, 2.5));
+        assert!(approx(render.highlight.intensity, 0.18));
         // Exercise Debug of the projected RenderParams tree.
         assert!(format!("{render:?}").contains("RenderParams"));
     }

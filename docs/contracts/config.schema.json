@@ -321,6 +321,41 @@
             "zoom_speed"
           ]
         },
+        "highlight": {
+          "description": "`render.highlight.*` — the hover highlight glow (issue #12).",
+          "type": "object",
+          "properties": {
+            "intensity": {
+              "description": "`render.highlight.intensity` — peak brightness added at the centre, in\n`[0, 1]`; 0 disables the glow.",
+              "type": "number",
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "radius": {
+              "description": "`render.highlight.radius` — the soft disc's radius in world units.\nNon-negative; 0 disables the glow.",
+              "type": "number",
+              "format": "float",
+              "minimum": 0.0
+            },
+            "rgb": {
+              "description": "`render.highlight.rgb` — the glow tint, linear RGB.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "rgb",
+            "radius",
+            "intensity"
+          ]
+        },
         "hud": {
           "description": "`render.hud.*` — the read-only debug/HUD overlay (ADR 0015; issue #8\nPhase 3).",
           "type": "object",
@@ -552,7 +587,8 @@
         "mesh",
         "window",
         "hud",
-        "animation"
+        "animation",
+        "highlight"
       ]
     },
     "sim": {

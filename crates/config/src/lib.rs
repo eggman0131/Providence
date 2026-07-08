@@ -304,6 +304,10 @@ pub struct RenderParams {
     /// (ADR 0022 §5; issue #9/#10 Phase 3). Render-only: the interpolation is
     /// pure presentation, adapter-local, and never touches a core height.
     pub animation: AnimationParams,
+    /// `render.highlight.*` — the hover highlight glow (issue #12): the soft pool
+    /// of light the renderer paints on the terrain under the cursor to mark the
+    /// vertex a shaping click would target.
+    pub highlight: HighlightParams,
 }
 
 /// `render.camera.*` — the workbench view camera (ADR 0020 §3). The camera is
@@ -500,6 +504,30 @@ pub struct AnimationParams {
     /// vertex ring. `0` makes the whole change settle together (Phase-3
     /// behaviour).
     pub ripple_ms_per_unit: f32,
+}
+
+/// `render.highlight.*` — the hover highlight (issue #12): a soft pool of light
+/// the renderer paints on the terrain surface under the cursor, marking the
+/// vertex a shaping click would target.
+///
+/// Presentation only and adapter-local (ADR 0020 §3): the renderer resolves the
+/// cursor-picked vertex and tints the surface around it *at the edge*; nothing
+/// it computes ever reaches the core. It is deliberately **subtle** — a gentle
+/// radial glow that eases to nothing at its rim, never a hard dot or ring — so
+/// the tint reads as light on the land, not paint. Because it carries floats it
+/// derives no `Eq` (like the rest of [`RenderParams`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HighlightParams {
+    /// `render.highlight.rgb` — the glow tint, linear RGB. Added to the lit
+    /// surface (not replacing it), so a soft warm white reads as a pool of light
+    /// rather than a coloured mark.
+    pub rgb: [f32; 3],
+    /// `render.highlight.radius` — the soft disc's radius, in world units
+    /// (horizontal distance from the hovered vertex). `0` disables the glow.
+    pub radius: f32,
+    /// `render.highlight.intensity` — peak brightness added at the centre, in
+    /// `[0, 1]`, easing to `0` at the rim. Small by design; `0` disables the glow.
+    pub intensity: f32,
 }
 
 /// `input.*` — input mapping & sensitivities for the interactive workbench

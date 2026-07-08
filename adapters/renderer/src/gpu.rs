@@ -38,6 +38,10 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
     shading: vec4<f32>,
+    // Hover highlight (issue #12): xyz = hovered vertex world position,
+    // w = soft-disc radius (0 disables). rgb = glow tint, w = peak intensity.
+    highlight_center: vec4<f32>,
+    highlight_tint: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -45,6 +49,7 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) world: vec3<f32>,
 };
 
 @vertex
@@ -57,6 +62,7 @@ fn vs_main(
     out.clip = u.view_proj * vec4<f32>(position, 1.0);
     out.normal = normal;
     out.color = color;
+    out.world = position;
     return out;
 }
 
@@ -65,8 +71,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let l = normalize(u.light_dir.xyz);
     let diffuse = max(dot(n, l), 0.0) * u.shading.y;
-    let intensity = min(u.shading.x + diffuse, 1.0);
-    return vec4<f32>(in.color * intensity, 1.0);
+    let shade = min(u.shading.x + diffuse, 1.0);
+    var color = in.color * shade;
+
+    // Hover highlight (issue #12): a soft pool of light on the surface under the
+    // cursor. Measured by horizontal (xz) distance from the hovered vertex and
+    // eased by a smoothstep to nothing at the disc rim — mirrors the canonical
+    // `highlight::glow_falloff`. Additive, so it reads as light rather than paint.
+    let radius = u.highlight_center.w;
+    let intensity = u.highlight_tint.w;
+    if radius > 0.0 && intensity > 0.0 {
+        let center_xz = vec2<f32>(u.highlight_center.x, u.highlight_center.z);
+        let d = distance(in.world.xz, center_xz);
+        let s = clamp(1.0 - d / radius, 0.0, 1.0);
+        let glow = s * s * (3.0 - 2.0 * s) * intensity;
+        color = color + u.highlight_tint.rgb * glow;
+    }
+    return vec4<f32>(color, 1.0);
 }
 ";
 
@@ -130,6 +151,12 @@ struct Uniforms {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
     shading: [f32; 4],
+    /// Hover highlight (issue #12): `[x, y, z, radius]` — the hovered vertex
+    /// world position and the soft-disc radius (`0` disables the glow).
+    highlight_center: [f32; 4],
+    /// Hover highlight tint: `[r, g, b, intensity]` — the glow colour and its
+    /// peak added brightness.
+    highlight_tint: [f32; 4],
 }
 
 /// A water-plane GPU vertex: just a world-space position (colour/shimmer come
@@ -174,6 +201,17 @@ pub struct TerrainScene {
     /// The wall-clock time (seconds) the water shimmer is drawn at, supplied at
     /// the edge (I3). `0` unless the caller advances it each frame.
     time: f32,
+    /// The hovered vertex's world position when the cursor is over the terrain
+    /// (issue #12): the centre of the soft highlight glow, or `None` when the
+    /// cursor points at empty space (the glow is then off). Adapter-local view
+    /// state, like the camera — it never crosses the boundary (ADR 0020 §3).
+    highlight_center: Option<[f32; 3]>,
+    /// The highlight glow tint (`render.highlight.rgb`), linear RGB.
+    highlight_rgb: [f32; 3],
+    /// The highlight glow's soft-disc radius (`render.highlight.radius`).
+    highlight_radius: f32,
+    /// The highlight glow's peak added brightness (`render.highlight.intensity`).
+    highlight_intensity: f32,
 }
 
 /// The prepared water draw (ADR 0023, Phase 2): its own pipeline, plane vertex
@@ -278,6 +316,10 @@ impl TerrainScene {
             light_dir,
             water,
             time: 0.0,
+            highlight_center: None,
+            highlight_rgb: params.highlight.rgb,
+            highlight_radius: params.highlight.radius,
+            highlight_intensity: params.highlight.intensity,
         }
     }
 
@@ -287,6 +329,15 @@ impl TerrainScene {
     /// only reaches the water shader — never the core (I3).
     pub fn set_time(&mut self, seconds: f32) {
         self.time = seconds;
+    }
+
+    /// Move the hover highlight to a hovered vertex's world position, or clear it
+    /// (`None`) when the cursor leaves the terrain (issue #12). The window sets
+    /// this as the cursor moves; the next [`update`](Self::update) uploads it into
+    /// the terrain uniform. Adapter-local, like [`set_camera`](Self::set_camera)
+    /// and [`set_time`](Self::set_time) — it never reaches the core (ADR 0020 §3).
+    pub fn set_highlight(&mut self, center: Option<[f32; 3]>) {
+        self.highlight_center = center;
     }
 
     /// Replace the view camera (issue #8 Phase 2). The window sets this from
@@ -330,10 +381,27 @@ impl TerrainScene {
     pub fn update(&self, queue: &wgpu::Queue, width: u32, height: u32) {
         let aspect = aspect_ratio(width, height);
         let view_proj = self.camera.view_projection(aspect);
+        // Pack the hover highlight: a hovered vertex places the glow at its world
+        // position with the configured radius/tint; no hover leaves the intensity
+        // at 0 so the shader draws no glow (issue #12).
+        let (highlight_center, highlight_tint) = match self.highlight_center {
+            Some([x, y, z]) => (
+                [x, y, z, self.highlight_radius],
+                [
+                    self.highlight_rgb[0],
+                    self.highlight_rgb[1],
+                    self.highlight_rgb[2],
+                    self.highlight_intensity,
+                ],
+            ),
+            None => ([0.0; 4], [0.0; 4]),
+        };
         let uniforms = Uniforms {
             view_proj,
             light_dir: [self.light_dir[0], self.light_dir[1], self.light_dir[2], 0.0],
             shading: [self.ambient, self.diffuse, 0.0, 0.0],
+            highlight_center,
+            highlight_tint,
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 

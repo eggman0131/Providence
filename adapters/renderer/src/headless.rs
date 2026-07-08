@@ -46,6 +46,10 @@ pub struct HeadlessRenderer {
     /// Phase 2). `0` by default — a deterministic still — but a filmstrip can
     /// advance it across frames to capture the sea *moving* without a display.
     time: f32,
+    /// Where to place the hover-highlight glow for the capture (issue #12), or
+    /// `None` (the default) so a plain capture is unchanged. The composition root
+    /// sets it to render a still that shows the highlight without a display.
+    highlight: Option<[f32; 3]>,
     /// The presented grid, kept so the HUD can pick the reticle vertex for the
     /// capture (issue #8 Phase 3). Only needed by the overlay.
     #[cfg(feature = "debug-hud")]
@@ -63,6 +67,7 @@ impl HeadlessRenderer {
             view: None,
             water: None,
             time: 0.0,
+            highlight: None,
             #[cfg(feature = "debug-hud")]
             grid: None,
         }
@@ -83,6 +88,15 @@ impl HeadlessRenderer {
     /// still.
     pub fn set_time(&mut self, seconds: f32) {
         self.time = seconds;
+    }
+
+    /// Place the hover-highlight glow at a world position for the capture
+    /// (issue #12), or leave it off (`None`, the default) so a plain capture is
+    /// unchanged. Adapter-local, like [`set_view`](Self::set_view): the
+    /// composition root uses it to render a still that shows the highlight — the
+    /// display-free way to judge the glow's subtlety for `/verify`.
+    pub fn set_highlight(&mut self, center: Option<[f32; 3]>) {
+        self.highlight = center;
     }
 
     /// Present a pre-built [`Mesh`] directly, bypassing [`present`]'s height →
@@ -142,6 +156,9 @@ impl HeadlessRenderer {
         // filmstrip advances it so the sea's *motion* is captured, ADR 0023
         // Phase 2). Wall-clock enters only here, never the core (I3).
         scene.set_time(self.time);
+        // Place the hover-highlight glow when one was requested (issue #12); a
+        // plain capture leaves it off and is unchanged.
+        scene.set_highlight(self.highlight);
         scene.update(&queue, width, height);
 
         // The read-only HUD overlay for the capture (issue #8 Phase 3): built
