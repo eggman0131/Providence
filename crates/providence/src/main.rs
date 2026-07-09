@@ -587,10 +587,13 @@ fn run_capture_shape(args: &[String]) -> ExitCode {
 
     // Float the living water surface over each still (ADR 0023, Phase 2) so the
     // filmstrip shows the coastline emerging as the sea vertex rises above the
-    // waterline — the reactive shoreline, made visible without a display.
+    // waterline — the reactive shoreline, made visible without a display. The
+    // plane carries the depth cue from the settled heights (ADR 0023, Phase 2
+    // refinement), so any deepened sea reads darker.
     let water = WaterPlane::new(
         width,
         height,
+        &after_heights,
         sea_level,
         render.mesh.vertical_scale,
         render.water.surface_lift,
@@ -606,7 +609,7 @@ fn run_capture_shape(args: &[String]) -> ExitCode {
         if let Err(code) = capture_mesh(
             tween.at(elapsed, render.animation.duration_ms),
             &render,
-            Some(water),
+            Some(water.clone()),
             elapsed / 1000.0,
             &path,
         ) {

@@ -501,15 +501,38 @@
           "description": "`render.water.*` — the living water surface (ADR 0023, Phase 2).",
           "type": "object",
           "properties": {
+            "deep_opacity": {
+              "description": "`render.water.deep_opacity` — deep surface alpha, in `[0, 1]`.",
+              "type": "number",
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "deep_rgb": {
+              "description": "`render.water.deep_rgb` — the deep water surface colour, linear RGB\n(ADR 0023, Phase 2 refinement).",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "depth_full": {
+              "description": "`render.water.depth_full` — water-column depth (in height steps) at which\nthe surface reaches full deep colour/opacity. Strictly positive, so the\nshallow→deep ramp never divides by zero.",
+              "type": "number",
+              "format": "float",
+              "minimum": 1e-6
+            },
             "opacity": {
-              "description": "`render.water.opacity` — base surface alpha, in `[0, 1]`.",
+              "description": "`render.water.opacity` — shallow surface alpha, in `[0, 1]`.",
               "type": "number",
               "format": "float",
               "maximum": 1.0,
               "minimum": 0.0
             },
             "rgb": {
-              "description": "`render.water.rgb` — the water surface colour, linear RGB.",
+              "description": "`render.water.rgb` — the shallow water surface colour, linear RGB.",
               "type": "array",
               "items": {
                 "type": "number",
@@ -547,6 +570,9 @@
           "required": [
             "rgb",
             "opacity",
+            "deep_rgb",
+            "deep_opacity",
+            "depth_full",
             "surface_lift",
             "ripple_amplitude",
             "ripple_speed",

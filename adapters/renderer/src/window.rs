@@ -127,12 +127,15 @@ impl RendererPort for WindowRenderer {
         // (issue #9 Phase 2), not only the debug HUD (issue #8 Phase 3).
         self.grid = GridSnapshot::from_frame(&frame);
         // Float the living water surface at the frame's waterline (ADR 0023,
-        // Phase 2). The plane is constant for the session (the datum and grid
-        // extent do not change under shaping), so it is built once here.
+        // Phase 2). The surface height (the datum) and grid extent are constant
+        // for the session, but the depth cue keys off the seabed *beneath* the
+        // surface, so the plane is rebuilt from the live heights on every shaping
+        // edit (ADR 0023, Phase 2 refinement) — here it is built from the first.
         self.waterline = frame.waterline();
         self.water = Some(WaterPlane::new(
             frame.width(),
             frame.height(),
+            frame.heights(),
             frame.waterline(),
             self.params.mesh.vertical_scale,
             self.params.water.surface_lift,
@@ -313,6 +316,10 @@ struct WindowState {
     /// reconstructs a snapshot carrying it (ADR 0023, Phase 2). The water plane
     /// itself is fixed and lives in the scene.
     waterline: i32,
+    /// `render.water.surface_lift`, kept so a shaping edit can rebuild the water
+    /// plane from the fresh heights (ADR 0023, Phase 2 refinement): the surface
+    /// height is unchanged but its per-vertex depth cue tracks the moved seabed.
+    water_surface_lift: f32,
     /// Whether the water shimmer is animating (`render.water.ripple_*` both
     /// positive). When it is, each frame requests another redraw so the sea keeps
     /// moving; a still sea leaves the window event-driven as before.
@@ -395,6 +402,7 @@ impl WindowState {
             hover_vertex: None,
             vertical_scale: params.mesh.vertical_scale,
             waterline,
+            water_surface_lift: params.water.surface_lift,
             water_animates: params.water.ripple_amplitude > 0.0 && params.water.ripple_speed > 0.0,
             clock_start: Instant::now(),
             #[cfg(feature = "debug-hud")]
@@ -487,9 +495,23 @@ impl WindowState {
         let heights = driver.heights().to_vec();
         let types = driver.types().to_vec();
         // The waterline is the session-constant datum, so it is cached rather
-        // than re-pulled (the water plane is fixed; only the terrain is rebuilt).
+        // than re-pulled — but the seabed *beneath* it just moved, so the water
+        // plane's depth cue is rebuilt from the fresh heights (ADR 0023, Phase 2
+        // refinement). The surface height is unchanged; only the per-vertex water
+        // depth is. This snaps with the logical grid (below), while the drawn
+        // terrain surface eases — deeper/shallower water shows the instant the
+        // edit lands, exactly like the pick grid.
         let frame = TerrainFrame::new(width, height, &heights, &types, self.waterline);
         let target = build_mesh(&frame, self.vertical_scale, &self.material);
+        let water = WaterPlane::new(
+            width,
+            height,
+            &heights,
+            self.waterline,
+            self.vertical_scale,
+            self.water_surface_lift,
+        );
+        self.scene.set_water(&self.device, &water);
         self.grid = GridSnapshot::from_frame(&frame);
         // The shaped vertex's world (x, z) is the ripple centre (the ripple lags
         // by distance from it). Reuse the mesh's own vertex placement so the

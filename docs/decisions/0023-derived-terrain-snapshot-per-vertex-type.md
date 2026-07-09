@@ -63,6 +63,18 @@ The second field-by-field growth this ADR anticipated (issue [#22](https://githu
 
 The `render.water.*` keys (`rgb`/`opacity`/`surface_lift`/`ripple_amplitude`/`ripple_speed`/`ripple_scale`) gain schema entries; the pure water-plane geometry is gate-tested; the GPU water pass is exercised only through the headless capture (I9), whose filmstrip advances the shimmer clock so the sea's *motion* is observable without a display. This ships the calm version; flow, foam, and turbulence are a later escalation the shape leaves room for. Immovable features (Phase 3) are the third and final growth under this ADR.
 
+### Phase 2 refinement — the depth cue (a flat surface over deeper/shallower water)
+
+The Director, shaping in the live workbench, found that **digging a sea vertex read as "a hole in the surface of the water."** The surface plane was already provably flat (one shared height, session-constant); the defect was that the *uniformly* translucent sheet let the excavated crater show straight through it — walls and all — so a deeper seabed read as a hole in the water rather than as deeper water. The Director's ruling: the water surface must always sit at one flat height, while **deeper or shallower water is a legitimate, wanted thing** — it should show in the water's own look, not by exposing the seabed.
+
+So the water surface becomes **depth-cued**:
+
+1. **The water plane carries a per-vertex water-column depth.** The flat 2-triangle quad becomes a grid tessellation (matching the terrain mesh) whose every vertex carries `max(0, waterline − seabed_height)` in integer height steps — how deep the water is *beneath* that point. Still pure, GPU-free geometry, gate-tested in [`crate::water`] before any shader runs. The surface height is unchanged; only this depth varies.
+2. **The shader ramps shallow → deep over the column.** A fragment's interpolated depth drives a `smoothstep` blend from the shallow `rgb`/`opacity` to a new deep `deep_rgb`/`deep_opacity`, saturating at `depth_full` steps. Shallows stay clear and pale (the coastline-through-water charm survives); the deeps darken and turn near-opaque, so a dug pit reads as *deeper water*, and the excavated floor is hidden rather than exposed. It is impossible to see a "hole" in the surface because the surface never moves and the water only gets *darker* with depth.
+3. **The depth cue tracks live edits.** Because it derives from the seabed heights, the plane is rebuilt on every shaping edit (the water twin of the mesh rebuild) — it snaps with the logical pick-grid the instant the edit lands, while the drawn terrain still eases. The waterline datum is still session-constant (no new `SimDriver` seam); only the per-vertex depth moves. Determinism is untouched (I3) — this is presentation only, keyed on derived reads, the core unchanged.
+
+New `render.water.*` keys `deep_rgb`/`deep_opacity` (linear-RGB + alpha) and `depth_full` (steps, validated `> 0` so the ramp never divides by zero) gain schema entries; `rgb`/`opacity` are re-documented as the *shallow* end. The tessellated plane + per-vertex depth are gate-tested; the depth-cued shader is exercised through the headless capture (I9).
+
 ## Alternatives considered
 
 - **Renderer re-derives the type from heights + thresholds.** Rejected: it pulls the model's classification *rules* into the renderer — against ADR 0020's "key on derived state, not the model's internals" — and duplicates the core's `classify_vertex`. Carrying the already-derived type keeps the rules in one place.

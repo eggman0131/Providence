@@ -272,10 +272,13 @@ impl RendererPort for HeadlessRenderer {
             &self.params.material,
         ));
         // Float the living water surface at the frame's waterline (ADR 0023,
-        // Phase 2), so a headless capture shows the sea and the coastline.
+        // Phase 2), so a headless capture shows the sea and the coastline. The
+        // plane carries the per-vertex depth cue from the frame's heights
+        // (ADR 0023, Phase 2 refinement), so deep water reads darker in the still.
         self.water = Some(WaterPlane::new(
             frame.width(),
             frame.height(),
+            frame.heights(),
             frame.waterline(),
             self.params.mesh.vertical_scale,
             self.params.water.surface_lift,

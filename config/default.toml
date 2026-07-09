@@ -145,8 +145,16 @@ peak_rgb = [0.92, 0.93, 0.95]      # snow toward the peaks
 # is ALIVE: a gentle time-driven shimmer, animated on an adapter-local wall-clock
 # at the edge, so no clock/float value reaches the core (I3), like the camera.
 # This ships the calm version; flow/foam/turbulence are a later escalation.
-rgb = [0.11, 0.34, 0.52]   # water surface colour, linear RGB (a translucent blue)
-opacity = 0.72             # base surface alpha [0,1]; lower lets the seabed show through
+rgb = [0.11, 0.34, 0.52]   # SHALLOW surface colour, linear RGB (a translucent blue)
+opacity = 0.72             # SHALLOW surface alpha [0,1]; lower lets the seabed show through
+# Depth cue (ADR 0023, Phase 2 refinement): the surface darkens and thickens as
+# the seabed drops away, so a dug pit reads as DEEP WATER, not a see-through hole
+# in the surface (the Director's ruling: the water surface stays one flat height,
+# deeper/shallower water shows in the water's own colour). The shallow rgb/opacity
+# above lerp to deep_rgb/deep_opacity over the first `depth_full` steps of column.
+deep_rgb = [0.02, 0.09, 0.20]  # DEEP surface colour, linear RGB (a dark ocean blue)
+deep_opacity = 0.97            # DEEP surface alpha [0,1]; near-opaque hides the excavated floor
+depth_full = 6.0               # water-column depth (in height steps) the deep cue saturates at (> 0)
 surface_lift = 0.2         # world units above the flat seabed the sheet sits (< one step)
 ripple_amplitude = 0.14    # shimmer brightness modulation (0 = a still sea)
 ripple_speed = 1.6         # shimmer travel speed, radians/second (0 freezes the pattern)

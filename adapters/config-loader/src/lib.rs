@@ -232,7 +232,9 @@ mod tests {
         land_rgb = [0.33, 0.49, 0.24]\nmountain_rgb = [0.45, 0.42, 0.38]\n\
         peak_rgb = [0.92, 0.93, 0.95]\n\n\
         [render.water]\n\
-        rgb = [0.11, 0.34, 0.52]\nopacity = 0.72\nsurface_lift = 0.2\n\
+        rgb = [0.11, 0.34, 0.52]\nopacity = 0.72\n\
+        deep_rgb = [0.02, 0.09, 0.20]\ndeep_opacity = 0.97\ndepth_full = 6.0\n\
+        surface_lift = 0.2\n\
         ripple_amplitude = 0.14\nripple_speed = 1.6\nripple_scale = 0.55\n\n\
         [render.background]\n\
         rgb = [0.05, 0.06, 0.09]\n\n\
@@ -440,6 +442,10 @@ mod tests {
         // The living water surface projects through (ADR 0023, Phase 2).
         assert!(approx3(render.water.rgb, [0.11, 0.34, 0.52]));
         assert!(approx(render.water.opacity, 0.72));
+        // The depth cue projects through (ADR 0023, Phase 2 refinement).
+        assert!(approx3(render.water.deep_rgb, [0.02, 0.09, 0.20]));
+        assert!(approx(render.water.deep_opacity, 0.97));
+        assert!(approx(render.water.depth_full, 6.0));
         assert!(approx(render.water.surface_lift, 0.2));
         assert!(approx(render.water.ripple_amplitude, 0.14));
         assert!(approx(render.water.ripple_speed, 1.6));
@@ -490,6 +496,18 @@ mod tests {
         };
         render_params_from_layers(&[default_layer(), overlay])
             .expect_err("a water opacity above 1.0 must fail garde validation (ADR 0023, Phase 2)");
+    }
+
+    #[test]
+    fn a_non_positive_water_depth_full_is_rejected() {
+        let overlay = Layer {
+            name: "local.toml".into(),
+            text: "[render.water]\ndepth_full = 0.0\n".into(),
+        };
+        render_params_from_layers(&[default_layer(), overlay]).expect_err(
+            "a zero depth_full must fail garde validation — the shallow→deep ramp \
+             divides by it (ADR 0023, Phase 2 refinement)",
+        );
     }
 
     #[test]

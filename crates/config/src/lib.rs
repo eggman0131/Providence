@@ -408,12 +408,32 @@ pub struct MaterialParams {
 /// foam, and turbulence are a later escalation the shape leaves room for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WaterParams {
-    /// `render.water.rgb` — the water surface colour, linear RGB (blended over
-    /// the seabed showing through, so a lighter tint than the seabed reads well).
+    /// `render.water.rgb` — the **shallow** water surface colour, linear RGB
+    /// (blended over the seabed showing through, so a lighter tint than the
+    /// seabed reads well). Water deepens toward [`deep_rgb`](Self::deep_rgb).
     pub rgb: [f32; 3],
-    /// `render.water.opacity` — base surface alpha in `[0, 1]`: `1` is opaque,
-    /// lower lets the seabed show through the shallows.
+    /// `render.water.opacity` — the **shallow** surface alpha in `[0, 1]`: `1` is
+    /// opaque, lower lets the seabed show through the shallows. Water thickens
+    /// toward [`deep_opacity`](Self::deep_opacity) as the seabed drops away.
     pub opacity: f32,
+    /// `render.water.deep_rgb` — the **deep** water surface colour, linear RGB
+    /// (ADR 0023, Phase 2 refinement). The surface colour lerps from
+    /// [`rgb`](Self::rgb) at the shallows to this over the first
+    /// [`depth_full`](Self::depth_full) height steps of water column, so deep
+    /// water reads as darker sea rather than a see-through pit. Typically a
+    /// darker blue than `rgb`.
+    pub deep_rgb: [f32; 3],
+    /// `render.water.deep_opacity` — the **deep** surface alpha in `[0, 1]`: the
+    /// opacity the water reaches over deep seabed (ADR 0023, Phase 2 refinement).
+    /// Near `1` hides the excavated floor so a dug hole reads as deep water, not
+    /// a hole in the surface. `>= opacity` in practice (deeper = thicker).
+    pub deep_opacity: f32,
+    /// `render.water.depth_full` — the water-column depth, **in integer height
+    /// steps**, at which the surface reaches its full [`deep_rgb`](Self::deep_rgb)
+    /// / [`deep_opacity`](Self::deep_opacity) (ADR 0023, Phase 2 refinement).
+    /// The shallow→deep ramp saturates here; larger spreads the gradient over a
+    /// deeper column. Strictly positive.
+    pub depth_full: f32,
     /// `render.water.surface_lift` — how far, in world units, the drawn surface
     /// sits **above** the seabed datum. Worldgen pins the sea floor flat at the
     /// waterline, so a small positive lift keeps the translucent sheet clear of

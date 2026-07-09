@@ -25,10 +25,11 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
 
-/// The water plane's vertex layout: a single `vec3<f32>` position; the surface's
-/// colour and shimmer come from the uniform, computed per-fragment.
-const WATER_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 1] =
-    wgpu::vertex_attr_array![0 => Float32x3];
+/// The water plane's vertex layout: a `vec3<f32>` position plus a `f32`
+/// water-column depth (ADR 0023, Phase 2 refinement) — the surface's colour and
+/// shimmer come from the uniform, cued per-fragment off the interpolated depth.
+const WATER_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32];
 
 /// The flat-shaded terrain shader: transform by the view/projection matrix,
 /// then Lambert diffuse (single directional light) plus ambient fill. Colours
@@ -91,17 +92,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 ";
 
-/// The water-surface shader (ADR 0023, Phase 2): transform the flat plane, then
-/// tint it `color` (rgb + opacity in `a`) modulated by a gentle time-driven
-/// shimmer. The shimmer is two crossing travelling waves over the world position
-/// (`ripple` = amplitude, speed, scale, time), so the sea reads as *alive*. It is
-/// alpha-blended over the terrain and depth-tested so land above the waterline
-/// occludes it — the coastline for free. Wall-clock time enters only here, at the
-/// edge (I3). Linear RGB; the sRGB target encodes on write.
+/// The water-surface shader (ADR 0023, Phase 2 + depth-cue refinement): transform
+/// the flat plane, then colour it by the **depth of water beneath the fragment**.
+/// The interpolated water-column depth (in height steps) drives a shallow→deep
+/// ramp: the surface lerps from `color` (shallow rgb + opacity) to `deep` (deep
+/// rgb + opacity) over the first `depth.x` steps, so a dug-out seabed reads as a
+/// darker, more opaque patch of *deeper water* rather than a see-through crater —
+/// the surface height itself never moves (the Director's ruling). A gentle
+/// time-driven shimmer (`ripple` = amplitude, speed, scale, time) modulates the
+/// brightness so the sea reads as *alive*. Alpha-blended over the terrain and
+/// depth-tested so land above the waterline occludes it — the coastline for free.
+/// Wall-clock time enters only here, at the edge (I3). Linear RGB; the sRGB
+/// target encodes on write.
 const WATER_SHADER: &str = r"
 struct Water {
     view_proj: mat4x4<f32>,
     color: vec4<f32>,
+    deep: vec4<f32>,
+    depth: vec4<f32>,
     ripple: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> w: Water;
@@ -109,13 +117,15 @@ struct Water {
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
+    @location(1) column: f32,
 };
 
 @vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VsOut {
+fn vs_main(@location(0) position: vec3<f32>, @location(1) column: f32) -> VsOut {
     var out: VsOut;
     out.clip = w.view_proj * vec4<f32>(position, 1.0);
     out.world = position;
+    out.column = column;
     return out;
 }
 
@@ -125,11 +135,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let speed = w.ripple.y;
     let scale = w.ripple.z;
     let time = w.ripple.w;
+    // Depth cue: how far toward 'fully deep' this fragment's water column is.
+    // depth.x (depth_full) is validated > 0, so the divide is safe; smoothstep
+    // eases the shallow→deep transition rather than ramping it linearly.
+    let t = smoothstep(0.0, 1.0, clamp(in.column / w.depth.x, 0.0, 1.0));
+    let rgb = mix(w.color.rgb, w.deep.rgb, t);
+    let alpha = mix(w.color.a, w.deep.a, t);
     // Two crossing travelling waves → a soft diagonal shimmer, in [-2, 2].
     let wave = sin(in.world.x * scale + time * speed)
              + sin(in.world.z * scale - time * speed * 0.8);
     let shimmer = 1.0 + wave * 0.5 * amplitude;
-    return vec4<f32>(w.color.rgb * shimmer, w.color.a);
+    return vec4<f32>(rgb * shimmer, alpha);
 }
 ";
 
@@ -159,22 +175,29 @@ struct Uniforms {
     highlight_tint: [f32; 4],
 }
 
-/// A water-plane GPU vertex: just a world-space position (colour/shimmer come
-/// from the uniform). Matches [`WATER_VERTEX_ATTRIBUTES`].
+/// A water-plane GPU vertex: a world-space position plus the water-column depth
+/// at that grid point, in height steps (ADR 0023, Phase 2 refinement). Colour and
+/// shimmer come from the uniform, cued off the depth. Matches
+/// [`WATER_VERTEX_ATTRIBUTES`].
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuWaterVertex {
     position: [f32; 3],
+    depth: f32,
 }
 
 /// The per-frame water uniform block mirrored by `Water` in [`WATER_SHADER`].
-/// `color` is rgb + opacity (`a`); `ripple` is amplitude, speed, scale, time —
-/// the wall-clock time supplied at the edge (I3).
+/// `color`/`deep` are the shallow/deep rgb + opacity (`a`) the surface ramps
+/// between over the first `depth.x` steps of water column (ADR 0023, Phase 2
+/// refinement); `ripple` is amplitude, speed, scale, time — the wall-clock time
+/// supplied at the edge (I3). `depth.yzw` pad the std140 vec4.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct WaterUniforms {
     view_proj: [[f32; 4]; 4],
     color: [f32; 4],
+    deep: [f32; 4],
+    depth: [f32; 4],
     ripple: [f32; 4],
 }
 
@@ -224,8 +247,15 @@ struct WaterPass {
     uniform_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
-    /// Surface colour + opacity as `[r, g, b, a]` (linear RGB).
+    /// Shallow surface colour + opacity as `[r, g, b, a]` (linear RGB).
     color: [f32; 4],
+    /// Deep surface colour + opacity as `[r, g, b, a]` — the depth cue ramps the
+    /// surface toward this over `depth_full` steps of water column (ADR 0023,
+    /// Phase 2 refinement).
+    deep: [f32; 4],
+    /// Water-column depth (in height steps) the deep cue saturates at
+    /// (`render.water.depth_full`, validated > 0).
+    depth_full: f32,
     /// Shimmer amplitude / speed / spatial scale (`render.water.ripple_*`).
     ripple_amplitude: f32,
     ripple_speed: f32,
@@ -373,6 +403,18 @@ impl TerrainScene {
         self.vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
     }
 
+    /// Re-upload the water plane after a shaping edit moved the seabed (ADR 0023,
+    /// Phase 2 refinement). The surface height is unchanged, but the water-column
+    /// depth beneath it shifts when land is raised or dug, so the depth cue must
+    /// re-derive against the fresh heights — the water counterpart to
+    /// [`set_mesh`](Self::set_mesh). A no-op when the scene carries no water pass
+    /// (a terrain-only capture). User-paced, so rebuilding the buffer is cheap.
+    pub fn set_water(&mut self, device: &wgpu::Device, plane: &WaterPlane) {
+        if let Some(water) = &mut self.water {
+            water.set_plane(device, plane);
+        }
+    }
+
     /// Recompute and upload the uniforms for a viewport of the given pixel
     /// size. Called on resize and before each draw so the projection tracks the
     /// surface's aspect ratio (and, in Phase 2, the live camera). Also refreshes
@@ -409,6 +451,8 @@ impl TerrainScene {
             let uniforms = WaterUniforms {
                 view_proj,
                 color: water.color,
+                deep: water.deep,
+                depth: [water.depth_full, 0.0, 0.0, 0.0],
                 ripple: [
                     water.ripple_amplitude,
                     water.ripple_speed,
@@ -467,6 +511,27 @@ impl TerrainScene {
     }
 }
 
+/// Upload a [`WaterPlane`] as a GPU vertex buffer (position + water-column
+/// depth), returning it with its vertex count — shared by [`WaterPass::new`] and
+/// [`WaterPass::set_plane`] so the initial build and the shaping rebuild agree.
+fn water_vertex_buffer(device: &wgpu::Device, plane: &WaterPlane) -> (wgpu::Buffer, u32) {
+    let vertices: Vec<GpuWaterVertex> = plane
+        .vertices()
+        .iter()
+        .map(|v| GpuWaterVertex {
+            position: v.position,
+            depth: v.depth,
+        })
+        .collect();
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("water-vertices"),
+        contents: bytemuck::cast_slice(&vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    (vertex_buffer, vertex_count)
+}
+
 impl WaterPass {
     /// Build the water pipeline and upload the plane vertices (ADR 0023,
     /// Phase 2). The colour/opacity and shimmer params are kept to be written
@@ -477,19 +542,7 @@ impl WaterPass {
         params: &WaterParams,
         plane: &WaterPlane,
     ) -> Self {
-        let vertices: Vec<GpuWaterVertex> = plane
-            .vertices()
-            .iter()
-            .map(|position| GpuWaterVertex {
-                position: *position,
-            })
-            .collect();
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("water-vertices"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+        let (vertex_buffer, vertex_count) = water_vertex_buffer(device, plane);
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-uniforms"),
@@ -529,10 +582,28 @@ impl WaterPass {
             vertex_buffer,
             vertex_count,
             color: [params.rgb[0], params.rgb[1], params.rgb[2], params.opacity],
+            deep: [
+                params.deep_rgb[0],
+                params.deep_rgb[1],
+                params.deep_rgb[2],
+                params.deep_opacity,
+            ],
+            depth_full: params.depth_full,
             ripple_amplitude: params.ripple_amplitude,
             ripple_speed: params.ripple_speed,
             ripple_scale: params.ripple_scale,
         }
+    }
+
+    /// Re-upload the plane vertices after a shaping edit changed the seabed depth
+    /// (ADR 0023, Phase 2 refinement). The surface stays one flat height, but the
+    /// water-column depth beneath it moves when the seabed is raised or dug, so
+    /// the depth cue must track it — the water twin of
+    /// [`TerrainScene::set_mesh`]. Same-size grid, so a plain vertex-buffer swap.
+    fn set_plane(&mut self, device: &wgpu::Device, plane: &WaterPlane) {
+        let (vertex_buffer, vertex_count) = water_vertex_buffer(device, plane);
+        self.vertex_buffer = vertex_buffer;
+        self.vertex_count = vertex_count;
     }
 
     /// Record the water pass, loading the colour/depth the terrain pass wrote so
