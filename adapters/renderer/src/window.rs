@@ -40,6 +40,17 @@ const WINDOW_TITLE: &str = "Providence — Terrain Workbench";
 /// plumbing, not a design tunable (the sensitivity lives in config).
 const PIXEL_SCROLL_TO_LINES: f32 = 0.02;
 
+/// How many *consecutive* failed surface acquisitions the render loop will retry
+/// (re-request a redraw for) before it stops driving itself and falls back to
+/// waiting for an OS event. A single failure is transient (a resize races the
+/// frame), so a few retries keep an in-flight animation alive across a hiccup;
+/// but an *unbounded* retry is a catastrophe — under a stalled GPU the loop would
+/// reconfigure-and-respin with no vsync backpressure, accumulating swapchain
+/// resources until memory is exhausted and the whole machine freezes (the
+/// watchdog-reboot this guards against). Renderer robustness plumbing, not a
+/// design tunable — an adapter-local constant like [`PIXEL_SCROLL_TO_LINES`].
+const MAX_PRESENT_RETRIES: u32 = 4;
+
 /// Map a `winit` mouse button to the config-level [`PointerButton`] the shaping
 /// bindings speak, or `None` for a button the bindings can't name (back/forward/
 /// extra). Converting at the window edge keeps the input mapping ([`crate::input`])
@@ -127,12 +138,15 @@ impl RendererPort for WindowRenderer {
         // (issue #9 Phase 2), not only the debug HUD (issue #8 Phase 3).
         self.grid = GridSnapshot::from_frame(&frame);
         // Float the living water surface at the frame's waterline (ADR 0023,
-        // Phase 2). The plane is constant for the session (the datum and grid
-        // extent do not change under shaping), so it is built once here.
+        // Phase 2). The surface height (the datum) and grid extent are constant
+        // for the session, but the depth cue keys off the seabed *beneath* the
+        // surface, so the plane is rebuilt from the live heights on every shaping
+        // edit (ADR 0023, Phase 2 refinement) — here it is built from the first.
         self.waterline = frame.waterline();
         self.water = Some(WaterPlane::new(
             frame.width(),
             frame.height(),
+            frame.heights(),
             frame.waterline(),
             self.params.mesh.vertical_scale,
             self.params.water.surface_lift,
@@ -313,6 +327,10 @@ struct WindowState {
     /// reconstructs a snapshot carrying it (ADR 0023, Phase 2). The water plane
     /// itself is fixed and lives in the scene.
     waterline: i32,
+    /// `render.water.surface_lift`, kept so a shaping edit can rebuild the water
+    /// plane from the fresh heights (ADR 0023, Phase 2 refinement): the surface
+    /// height is unchanged but its per-vertex depth cue tracks the moved seabed.
+    water_surface_lift: f32,
     /// Whether the water shimmer is animating (`render.water.ripple_*` both
     /// positive). When it is, each frame requests another redraw so the sea keeps
     /// moving; a still sea leaves the window event-driven as before.
@@ -321,6 +339,12 @@ struct WindowState {
     /// The only water clock in the whole path lives here, at the edge — nothing
     /// the core computes reads it (I3), exactly like the shaping animation.
     clock_start: Instant,
+    /// Consecutive surface-acquisition failures, reset to `0` on every presented
+    /// frame. Caps the loop's self-driven retries at [`MAX_PRESENT_RETRIES`] so a
+    /// persistently failing surface (e.g. a stalled GPU) cannot free-spin and
+    /// exhaust memory — the backpressure that keeps a recoverable stall from
+    /// freezing the machine.
+    present_failures: u32,
     /// The read-only debug/HUD overlay, when enabled (issue #8 Phase 3).
     #[cfg(feature = "debug-hud")]
     hud: Option<Hud>,
@@ -395,8 +419,10 @@ impl WindowState {
             hover_vertex: None,
             vertical_scale: params.mesh.vertical_scale,
             waterline,
+            water_surface_lift: params.water.surface_lift,
             water_animates: params.water.ripple_amplitude > 0.0 && params.water.ripple_speed > 0.0,
             clock_start: Instant::now(),
+            present_failures: 0,
             #[cfg(feature = "debug-hud")]
             hud,
         })
@@ -487,9 +513,23 @@ impl WindowState {
         let heights = driver.heights().to_vec();
         let types = driver.types().to_vec();
         // The waterline is the session-constant datum, so it is cached rather
-        // than re-pulled (the water plane is fixed; only the terrain is rebuilt).
+        // than re-pulled — but the seabed *beneath* it just moved, so the water
+        // plane's depth cue is rebuilt from the fresh heights (ADR 0023, Phase 2
+        // refinement). The surface height is unchanged; only the per-vertex water
+        // depth is. This snaps with the logical grid (below), while the drawn
+        // terrain surface eases — deeper/shallower water shows the instant the
+        // edit lands, exactly like the pick grid.
         let frame = TerrainFrame::new(width, height, &heights, &types, self.waterline);
         let target = build_mesh(&frame, self.vertical_scale, &self.material);
+        let water = WaterPlane::new(
+            width,
+            height,
+            &heights,
+            self.waterline,
+            self.vertical_scale,
+            self.water_surface_lift,
+        );
+        self.scene.set_water(&self.device, &water);
         self.grid = GridSnapshot::from_frame(&frame);
         // The shaped vertex's world (x, z) is the ripple centre (the ripple lags
         // by distance from it). Reuse the mesh's own vertex placement so the
@@ -646,23 +686,27 @@ impl WindowState {
     fn render(&mut self) {
         use wgpu::CurrentSurfaceTexture;
 
-        // Advance any in-flight shaping animation to now and re-upload the eased
-        // surface (ADR 0022 §5; issue #9/#10 Phase 3). Keep the redraw chain
-        // alive until it settles; requesting eagerly means a skipped frame below
-        // (a lost surface) still gets another shot.
-        if self.advance_animation() {
-            self.window.request_redraw();
-        }
+        // Reclaim GPU resources freed since the last frame and let submitted work
+        // drain — non-blocking (`Poll`), so it never stalls the UI thread. Doing
+        // this every frame (even ones we skip below) keeps the loop from
+        // out-running the driver's cleanup and accumulating swapchain/command
+        // resources under load (part of the runaway guard; see the redraw gating
+        // below and [`MAX_PRESENT_RETRIES`]).
+        let _ = self.device.poll(wgpu::PollType::Poll);
 
-        // Advance the water shimmer to the current wall-clock (ADR 0023, Phase 2)
-        // and, while the sea animates, keep requesting redraws so it keeps moving
-        // — the only water clock is read here, at the edge (I3). A still sea
-        // (`ripple_*` = 0) leaves the window event-driven as before.
+        // Advance any in-flight shaping animation (ADR 0022 §5) and the water
+        // shimmer (ADR 0023, Phase 2) to the current wall-clock, re-uploading the
+        // eased surface and refreshing the shimmer clock. Whether either wants
+        // another frame is *recorded* here but the redraw is requested only after
+        // a successful present below — gating the self-driven redraw on an actual
+        // presented frame is the backpressure that lets vsync throttle the loop
+        // (a failed acquisition can no longer free-spin). The only wall-clocks in
+        // the whole path live here, at the edge (I3); a still sea (`ripple_*` = 0)
+        // and a settled surface leave the window purely event-driven as before.
+        let animating = self.advance_animation();
         self.scene
             .set_time(self.clock_start.elapsed().as_secs_f32());
-        if self.water_animates {
-            self.window.request_redraw();
-        }
+        let wants_redraw = animating || self.water_animates;
 
         // Refresh the uniforms from the live controller so any orbit/pan/zoom
         // since the last frame shows (issue #8 Phase 2). Cheap: one small
@@ -675,14 +719,23 @@ impl WindowState {
             CurrentSurfaceTexture::Success(texture)
             | CurrentSurfaceTexture::Suboptimal(texture) => texture,
             // A lost/outdated surface is transient — reconfigure and skip the
-            // frame; the OS will request another redraw.
+            // frame. Retry (re-request a redraw) only while under the failure cap,
+            // so a genuine resize recovers but a persistently stalled GPU cannot
+            // reconfigure-and-respin without bound (the memory runaway that froze
+            // the machine). A real resize/expose also delivers its own OS redraw.
             CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
+                self.on_present_failure();
                 return;
             }
-            // Timeout / Occluded / Validation: skip this frame.
-            _ => return,
+            // Timeout / Occluded / Validation: skip this frame, bounded-retry only.
+            _ => {
+                self.on_present_failure();
+                return;
+            }
         };
+        // A drawable is in hand — the surface is healthy again.
+        self.present_failures = 0;
         let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -706,6 +759,32 @@ impl WindowState {
         #[cfg(not(feature = "debug-hud"))]
         self.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+
+        // Only now that a frame has actually presented — and Fifo has throttled us
+        // to the display's refresh — drive the next animation frame. Gating the
+        // self-driven redraw on a successful present is the loop's backpressure:
+        // no present, no spin (the guard against the memory runaway that froze the
+        // machine). One-shot event redraws (resize, hover, camera drag) are
+        // requested at their source and are unaffected.
+        if wants_redraw {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Record a failed surface acquisition and, while still under
+    /// [`MAX_PRESENT_RETRIES`] consecutive failures, request one more redraw to
+    /// retry. This keeps an in-flight animation alive across a transient hiccup
+    /// (a resize racing the frame) without ever free-spinning: once the cap is
+    /// reached the loop stops driving itself and waits for the next OS event,
+    /// which is what stops a stalled GPU from exhausting memory (I3-neutral —
+    /// no clock or core state is touched). The policy itself is the pure,
+    /// gate-tested [`next_present_retry`].
+    fn on_present_failure(&mut self) {
+        let (failures, retry) = next_present_retry(self.present_failures);
+        self.present_failures = failures;
+        if retry {
+            self.window.request_redraw();
+        }
     }
 
     /// Record the HUD overlay into `encoder` and return the command buffers to
@@ -736,5 +815,62 @@ impl WindowState {
             pixels_per_point: self.window.scale_factor() as f32,
         };
         hud.record(&self.device, &self.queue, encoder, view, &screen, &readout)
+    }
+}
+
+/// The render loop's surface-acquisition retry policy, factored out pure so it is
+/// gate-tested independently of the GPU glue that drives it. Given the count of
+/// consecutive failures *before* this one, return the incremented count and
+/// whether the loop should retry (re-request a redraw). Retries while at or under
+/// [`MAX_PRESENT_RETRIES`]; past that it stops, so a persistently failing surface
+/// (a stalled GPU) can never free-spin and exhaust memory. Saturating, so a stuck
+/// surface can never wrap the counter back under the cap and start spinning again.
+fn next_present_retry(failures: u32) -> (u32, bool) {
+    let failures = failures.saturating_add(1);
+    (failures, failures <= MAX_PRESENT_RETRIES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PRESENT_RETRIES, next_present_retry};
+
+    #[test]
+    fn a_first_failure_retries() {
+        let (failures, retry) = next_present_retry(0);
+        assert_eq!(failures, 1);
+        assert!(
+            retry,
+            "a single (transient) failure keeps the animation alive"
+        );
+    }
+
+    #[test]
+    fn it_retries_up_to_the_cap_then_stops() {
+        // Walk the counter up from zero as the loop would, and assert it retries
+        // exactly MAX_PRESENT_RETRIES times before giving up — the bound that
+        // stops a stalled GPU from free-spinning the loop into a memory runaway.
+        let mut failures = 0;
+        let mut retries = 0;
+        for _ in 0..MAX_PRESENT_RETRIES + 5 {
+            let (next, retry) = next_present_retry(failures);
+            failures = next;
+            if retry {
+                retries += 1;
+            }
+        }
+        assert_eq!(
+            retries, MAX_PRESENT_RETRIES,
+            "retries are capped, not unbounded"
+        );
+    }
+
+    #[test]
+    fn a_stuck_surface_never_wraps_back_into_retrying() {
+        // Once past the cap the counter saturates and `retry` stays false — a
+        // persistently failing surface can never overflow u32 and dip back under
+        // the cap to start spinning again.
+        let (failures, retry) = next_present_retry(u32::MAX);
+        assert_eq!(failures, u32::MAX, "saturates, no overflow panic");
+        assert!(!retry, "still refusing to retry at the ceiling");
     }
 }

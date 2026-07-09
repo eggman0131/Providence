@@ -445,12 +445,24 @@ pub struct MaterialSection {
 #[derive(Debug, Deserialize, JsonSchema, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct WaterSection {
-    /// `render.water.rgb` — the water surface colour, linear RGB.
+    /// `render.water.rgb` — the shallow water surface colour, linear RGB.
     #[garde(skip)]
     pub rgb: [f32; 3],
-    /// `render.water.opacity` — base surface alpha, in `[0, 1]`.
+    /// `render.water.opacity` — shallow surface alpha, in `[0, 1]`.
     #[garde(range(min = 0.0, max = 1.0))]
     pub opacity: f32,
+    /// `render.water.deep_rgb` — the deep water surface colour, linear RGB
+    /// (ADR 0023, Phase 2 refinement).
+    #[garde(skip)]
+    pub deep_rgb: [f32; 3],
+    /// `render.water.deep_opacity` — deep surface alpha, in `[0, 1]`.
+    #[garde(range(min = 0.0, max = 1.0))]
+    pub deep_opacity: f32,
+    /// `render.water.depth_full` — water-column depth (in height steps) at which
+    /// the surface reaches full deep colour/opacity. Strictly positive, so the
+    /// shallow→deep ramp never divides by zero.
+    #[garde(range(min = 0.000_001))]
+    pub depth_full: f32,
     /// `render.water.surface_lift` — world units the drawn surface sits above the
     /// seabed datum. Non-negative (0 places it exactly on the flat seabed).
     #[garde(range(min = 0.0))]
@@ -695,6 +707,9 @@ impl ConfigRoot {
             water: WaterParams {
                 rgb: self.render.water.rgb,
                 opacity: self.render.water.opacity,
+                deep_rgb: self.render.water.deep_rgb,
+                deep_opacity: self.render.water.deep_opacity,
+                depth_full: self.render.water.depth_full,
                 surface_lift: self.render.water.surface_lift,
                 ripple_amplitude: self.render.water.ripple_amplitude,
                 ripple_speed: self.render.water.ripple_speed,
